@@ -6,6 +6,6 @@
     "graphs": {
         "chat": "./my_agent/graphs/chat.py:graph"
     },
-    
+    "env": ".env",
     "python_version": "3.11"
 }
