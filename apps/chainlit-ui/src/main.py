@@ -1,25 +1,31 @@
+import asyncio
 import chainlit as cl
-from chainlit.input_widget import Switch
-from typing import Dict
+import httpx
+import os
 
-@cl.on_chat_start  
+GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+
+@cl.on_chat_start
 async def start():
-    # Show a simple settings panel; you'll wire it to tools later
-    settings = await cl.ChatSettings(
-        [Switch(id="web_search", label="Web search", initial=False)]
-    ).send()
-    await cl.Message(content="PrynAI is alive. Upload files or say hi.").send()
-
-@cl.on_settings_update
-async def on_settings_update(settings: Dict):
-    # Persist the toggle for routing to the gateway → LangGraph tools
-    cl.user_session.set("web_search", bool(settings.get("web_search", False)))
+    await cl.Message(content="Hi! I’m ready.").send()
 
 @cl.on_message
 async def handle_message(message: cl.Message):
-    # Quick streaming echo to verify UI plumbing
-    tokens = message.content.split()
-    msg = await cl.Message(content="").send()
-    for t in tokens:
-        await msg.stream_token(t + " ")
-    await msg.update()
+    endpoint = f"{GATEWAY_BASE}/api/chat/stream"
+    data = {"message": message.content, "thread_id": None}
+    msg = cl.Message(content="")
+    await msg.send()
+    try:
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", endpoint, json=data, headers={"accept": "text/event-stream"}) as r:
+                async for line in r.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        token = line.removeprefix("data: ")
+                        await msg.stream_token(token)
+                    elif line.startswith("event: done"):
+                        break
+        await msg.update()
+    except Exception as e:
+        await cl.Message(content=f"Error: {e}").send()

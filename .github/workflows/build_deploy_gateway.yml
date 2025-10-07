@@ -1,25 +1,59 @@
-name: gateway-build-deploy
+name: build-and-deploy-gateway
 on:
   push:
     branches: [ main ]
-    paths: [ "apps/gateway-fastapi/**", ".github/workflows/build_deploy_gateway.yml" ]
+    paths:
+      - "apps/gateway-fastapi/**"
+      - ".github/workflows/build_deploy_gateway.yml"
+
+# Avoid overlapping deploys to the same app
+concurrency:
+  group: deploy-gateway
+  cancel-in-progress: false
+
 jobs:
-  build-deploy:
-    permissions: { id-token: write, contents: read }
+  deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC
+      contents: read
+    env:
+      # Set these in GitHub → Settings → Secrets and variables → Actions → Variables
+      RG: ${{ vars.AZ_RG }}                      # e.g. rg-chat-prynai
+      ACR_NAME: ${{ vars.ACR_NAME }}            # e.g. prynaiacr123456
+      REGISTRY: ${{ vars.ACR_NAME }}.azurecr.io
+      APP: ${{ vars.GATEWAY_APP_NAME }}         # MUST equal your ACA resource name (ca-gateway)
+      IMAGE_REPO: prynai/gateway
+      IMAGE_TAG: ${{ github.sha }}
+      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/prynai/gateway:${{ github.sha }}
+
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/login@v2
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          tenant-id:  ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - uses: azure/container-apps-deploy-action@v2
+# OIDC setup refs: Microsoft Learn. 
+# It uses client/tenant/subscription IDs stored as GitHub secrets. 
+# https: learn.microsoft.com/azure/developer/github/connect-from-azure-openid-connect
+      - name: Build image in ACR (server-side)
+        uses: azure/cli@v2
         with:
-          resourceGroup: ${{ vars.AZ_RG }}
-          containerAppName: ${{ vars.GATEWAY_APP_NAME }}
-          acrName: ${{ vars.ACR_NAME }}
-          imageToBuild: ${{ vars.ACR_NAME }}.azurecr.io/prynai/gateway:${{ github.sha }}
-          dockerfilePath: apps/gateway-fastapi/Dockerfile
-          targetPort: 8080
-          ingress: external
+          azcliversion: latest
+          inlineScript: |
+            az acr build -r $ACR_NAME -t $IMAGE apps/gateway-fastapi
+# ACR Tasks build the image in Azure and push to your registry. 
+# https: learn.microsoft.com/cli/azure/acr#az-acr-build
+
+      - name: Roll the Container App to the new image
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az config set extension.use_dynamic_install=yes_without_prompt
+            az containerapp update -g $RG -n $APP --image $IMAGE
+# Update existing app by name + resource group. 
+# https: learn.microsoft.com/azure/container-apps/github-actions
