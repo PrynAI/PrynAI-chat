@@ -87,8 +87,8 @@ async def stream_chat(payload: ChatIn, request: Request):
                 stream_mode="messages",
             ):
                 # Debug: inspect raw stream item
-                print("STREAM ITEM TYPE:", type(item))
-                print("STREAM ITEM REPR:", repr(item)[:300], flush=True)
+                #print("STREAM ITEM TYPE:", type(item))
+                #print("STREAM ITEM REPR:", repr(item)[:300], flush=True)
 
 
                 # Handle both tuple and non-tuple shapes defensively
