@@ -10,9 +10,11 @@ class ChatState(MessagesState):
 
 # Stream-capable LLM (model of your choice)
 llm = ChatOpenAI(
-    model="gpt-5-mini",  # pick your tiered model
-    reasoning={"effort": "medium"},
-    model_kwargs={"text": {"verbosity": "high"}},
+    model="gpt-4o-mini",
+    temperature=0.3,
+    #model="gpt-5-mini",  # pick your tiered model
+    # reasoning={"effort": "medium"},
+    # model_kwargs={"text": {"verbosity": "high"}},
     streaming=True,       # critical for token streaming
 )
 
