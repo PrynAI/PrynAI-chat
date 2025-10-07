@@ -1,9 +1,10 @@
 # apps/gateway-fastapi/src/main.py
-import os
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import AsyncGenerator
+import os
+
 from langgraph.pregel.remote import RemoteGraph
 from langgraph_sdk import get_client
 
@@ -12,13 +13,12 @@ app = FastAPI()
 LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]
 GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
 
-# RemoteGraph can be created via URL or client; we’ll use client for async stream
 client = get_client(url=LANGGRAPH_URL)
 remote = RemoteGraph(GRAPH_NAME, client=client)
 
 class ChatIn(BaseModel):
     message: str
-    thread_id: str | None = None  # enable persistence later
+    thread_id: str | None = None
 
 @app.get("/healthz")
 def healthz():
@@ -26,32 +26,34 @@ def healthz():
 
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatIn, request: Request):
-    """Streams model tokens as SSE (text/event-stream)"""
     user_msg = {"role": "user", "content": payload.message}
-    config = {}
-    if payload.thread_id:
-        config = {"configurable": {"thread_id": payload.thread_id}}
+    config = {"configurable": {"thread_id": payload.thread_id}} if payload.thread_id else {}
 
     async def event_gen() -> AsyncGenerator[bytes, None]:
         try:
-            async for chunk in remote.astream({"messages": [user_msg]}, config=config):
-                # “chunk” objects vary; we’ll pull any delta text safely
-                text = ""
-                if isinstance(chunk, dict):
-                    # look for message deltas from LangGraph
-                    msg = chunk.get("messages") or chunk.get("output")
-                    if isinstance(msg, list) and msg:
-                        part = msg[-1]
-                        if isinstance(part, dict):
-                            text = part.get("content", "") or ""
-                if text:
-                    yield f"data: {text}\n\n".encode("utf-8")
+            # Ask LangGraph for token-level streaming
+            async for msg_chunk, meta in remote.astream(
+                {"messages": [user_msg]},
+                config=config,
+                stream_mode="messages",   # stream at message chunk level
+            ):
+                # msg_chunk can be an AIMessageChunk (has .content) or dict-like
+                content = getattr(msg_chunk, "content", None)
+                if content is None and isinstance(msg_chunk, dict):
+                    content = msg_chunk.get("content")
 
-            # signal completion
-            yield b"event: done\ndata: [DONE]\n\n"
+                if content:
+                    # SSE: send one data line per token-ish chunk
+                    yield f"data: {content}\n\n".encode("utf-8")
+
         except Exception as e:
-            # SSE-friendly error
-            err = f'event: error\ndata: {str(e)}\n\n'
-            yield err.encode("utf-8")
+            yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
+        finally:
+            yield b"event: done\ndata: [DONE]\n\n"
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
