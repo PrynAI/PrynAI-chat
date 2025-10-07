@@ -1,4 +1,3 @@
-# apps/gateway-fastapi/src/main.py
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -20,28 +19,54 @@ class ChatIn(BaseModel):
     message: str
     thread_id: str | None = None
 
-def _flatten_content(content: Any) -> str:
-    """Coerce LangChain/LangGraph content into plain text."""
-    # 1) Simple string
-    if isinstance(content, str):
-        return content
-    # 2) List of content blocks (standard)
-    if isinstance(content, list):
+def _blocks_to_text(blocks: Any) -> str:
+    """Flatten LangChain content blocks to a plain string."""
+    if isinstance(blocks, str):
+        return blocks
+    if isinstance(blocks, list):
         parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                # text blocks are common; fall back to other typical keys
-                t = block.get("text") or block.get("input_text") or block.get("output_text")
+        for b in blocks:
+            if isinstance(b, dict):
+                t = b.get("text") or b.get("input_text") or b.get("output_text")
             else:
-                # some providers expose objects with a .text attribute
-                t = getattr(block, "text", None)
+                t = getattr(b, "text", None)
             if t:
                 parts.append(t)
         return "".join(parts)
-    # 3) AIMessageChunk or similar with .content and sometimes .additional_kwargs
-    c = getattr(content, "content", None)
-    if c:
-        return _flatten_content(c)
+    return ""
+
+def _chunk_to_text(chunk: Any) -> str:
+    """
+    Coerce whatever LangGraph gives us to a plain text token:
+    - AIMessageChunk-like object with .content
+    - dict serialized across RemoteGraph with keys like 'content' or 'messages' or 'delta'
+    - plain string (rare)
+    """
+    # 1) AIMessageChunk or similar
+    c = getattr(chunk, "content", None)
+    if c is not None:
+        return _blocks_to_text(c)
+
+    # 2) Dict representations from RemoteGraph
+    if isinstance(chunk, dict):
+        if "content" in chunk:                # direct content list/string
+            return _blocks_to_text(chunk["content"])
+        if "delta" in chunk:                  # some providers use delta objects
+            d = chunk["delta"]
+            if isinstance(d, dict):
+                return _blocks_to_text(d.get("content") or d.get("text") or d)
+            return _blocks_to_text(d)
+        if "messages" in chunk and chunk["messages"]:
+            m = chunk["messages"][-1]
+            # m may be dict or message-like object
+            if isinstance(m, dict):
+                return _blocks_to_text(m.get("content", m))
+            return _blocks_to_text(getattr(m, "content", m))
+
+    # 3) Fallback: raw string
+    if isinstance(chunk, str):
+        return chunk
+
     return ""
 
 @app.get("/healthz")
@@ -55,16 +80,29 @@ async def stream_chat(payload: ChatIn, request: Request):
 
     async def event_gen() -> AsyncGenerator[bytes, None]:
         try:
-            # Token-level streaming from the remote graph
-            async for msg_chunk, meta in remote.astream(
+            # messages mode => (message_chunk, metadata) tuples with token deltas
+            async for item in remote.astream(
                 {"messages": [user_msg]},
                 config=config,
                 stream_mode="messages",
             ):
-                # msg_chunk is an AIMessageChunk-like object
-                text = _flatten_content(getattr(msg_chunk, "content", None))
+                # Debug: inspect raw stream item
+                print("STREAM ITEM TYPE:", type(item))
+                print("STREAM ITEM REPR:", repr(item)[:300], flush=True)
+
+
+                # Handle both tuple and non-tuple shapes defensively
+                if isinstance(item, tuple) and len(item) == 2:
+                    msg_chunk, _meta = item
+                else:
+                    msg_chunk = item
+
+                text = _chunk_to_text(msg_chunk)
                 if text:
-                    yield f"data: {text}\n\n".encode("utf-8")
+                    # Split embedded newlines per SSE spec (each line prefixed with data:)
+                    safe = text.replace("\r\n", "\n").replace("\r", "\n")
+                    for line in safe.split("\n"):
+                        yield f"data: {line}\n\n".encode("utf-8")
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
         finally:
@@ -73,6 +111,6 @@ async def stream_chat(payload: ChatIn, request: Request):
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
+        "X-Accel-Buffering": "no",  # avoid proxy buffering; recommended in SSE guides
     }
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
