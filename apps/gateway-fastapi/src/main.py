@@ -22,19 +22,26 @@ class ChatIn(BaseModel):
 
 def _flatten_content(content: Any) -> str:
     """Coerce LangChain/LangGraph content into plain text."""
+    # 1) Simple string
     if isinstance(content, str):
         return content
+    # 2) List of content blocks (standard)
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for block in content:
-            # block may be dict-like {'type': 'text', 'text': '...'} or an object with .text
             if isinstance(block, dict):
+                # text blocks are common; fall back to other typical keys
                 t = block.get("text") or block.get("input_text") or block.get("output_text")
             else:
+                # some providers expose objects with a .text attribute
                 t = getattr(block, "text", None)
             if t:
                 parts.append(t)
         return "".join(parts)
+    # 3) AIMessageChunk or similar with .content and sometimes .additional_kwargs
+    c = getattr(content, "content", None)
+    if c:
+        return _flatten_content(c)
     return ""
 
 @app.get("/healthz")
@@ -48,16 +55,15 @@ async def stream_chat(payload: ChatIn, request: Request):
 
     async def event_gen() -> AsyncGenerator[bytes, None]:
         try:
-            # ✅ token-level streaming from LangGraph
+            # Token-level streaming from the remote graph
             async for msg_chunk, meta in remote.astream(
                 {"messages": [user_msg]},
                 config=config,
                 stream_mode="messages",
             ):
-                content = getattr(msg_chunk, "content", None)
-                text = _flatten_content(content)
+                # msg_chunk is an AIMessageChunk-like object
+                text = _flatten_content(getattr(msg_chunk, "content", None))
                 if text:
-                    # SSE requires text lines ending with \n\n
                     yield f"data: {text}\n\n".encode("utf-8")
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
@@ -67,6 +73,6 @@ async def stream_chat(payload: ChatIn, request: Request):
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",  # avoid proxy buffering
+        "X-Accel-Buffering": "no",
     }
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
