@@ -17,6 +17,8 @@ langchain-tavily>=0.2.11,<0.3   # LangChain’s Tavily tool bindings
 # HTTP & utilities (kept light)
 httpx>=0.27,<1
 
+# LangGraph CLI: local graph dev, testing, deployment
+langgraph-cli[inmem]
 
 
 
