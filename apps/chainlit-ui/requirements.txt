@@ -1,0 +1,9 @@
+# Chainlit-based chat UI; no server bits here
+# Tested on Python 3.11 and 3.13 (Windows OK)
+
+# UI runtime
+chainlit>=2.8.2,<3.0.0
+
+# Explanations:
+# Chainlit is the whole UI runtime (file/image uploads, Chat Settings toggle).
+# The 2.8.x line is current and works on 3.13.

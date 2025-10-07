@@ -1,0 +1,1 @@
+# 'Web search: on/off" toggle persisted in session

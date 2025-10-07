@@ -1,0 +1,11 @@
+{
+    "_comment": "Lists Gmail/Calendar/Outlook/Teams/LinkedIn/GitHub servers",
+    "servers": [
+        "gmail",
+        "calendar",
+        "outlook",
+        "teams",
+        "linkedin",
+        "github"
+    ]
+}

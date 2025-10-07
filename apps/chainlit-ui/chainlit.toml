@@ -1,0 +1,9 @@
+# ==============================
+# Chainlit config (Including websocket + streaming)
+# ==============================
+
+[project]
+name = "PrynAI Chat UI"
+
+[features.spontaneous_file_upload]
+enabled = true

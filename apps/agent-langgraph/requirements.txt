@@ -1,0 +1,30 @@
+# The LangGraph app (runs on LangGraph Platform Cloud), plus tools
+
+# Orchestration & SDKs
+langgraph>=0.6.0,<0.7           # agent graph runtime
+langgraph-sdk>=0.2.9,<0.3       # Remote client/API interactions with LangGraph Cloud
+langchain-core>=0.3.76,<0.4     # base types/runnables used by LangGraph
+langsmith>=0.4.30,<0.5          # tracing/observability hooks
+
+# Models
+openai>=2.1.0,<3                # OpenAI Python SDK with streaming Responses API
+langchain-openai>=0.3.30,<0.4   # if you prefer LangChain wrappers around OpenAI
+
+# Web search tool (toggleable per session)
+tavily-python>=0.7.12,<0.8      # Tavily SDK
+langchain-tavily>=0.2.11,<0.3   # LangChain’s Tavily tool bindings
+
+# HTTP & utilities (kept light)
+httpx>=0.27,<1
+
+
+
+
+# LangGraph + SDK: graph runtime & remote client for LangGraph Cloud app structure (deployment target).
+
+# OpenAI: latest Python SDK with streaming via the Responses API; you’ll use it inside graph nodes.
+
+# LangSmith: traces your runs & evaluations; great for debugging & improving your agents.
+
+# Tavily via LangChain tools when the “Web search” toggle is on.
+

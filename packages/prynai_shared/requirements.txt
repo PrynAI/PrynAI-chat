@@ -1,0 +1,10 @@
+# Shared utilities: logging, types, tiny helpers
+structlog>=25.4.0,<26
+typing_extensions>=4.12.0,<5
+
+
+"""
+explanations:
+structlog for structured, JSON‑friendly logs that play nicely with Azure Monitor.
+
+"""

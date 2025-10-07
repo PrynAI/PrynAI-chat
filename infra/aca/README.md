@@ -1,0 +1,1 @@
+### ACA app specs live here (optional). Use Key Vault refs with Managed Identity for secrets.

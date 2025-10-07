@@ -1,0 +1,1 @@
+### Arcade MCP servers (Gmail, Calendar, Outlook, Teams, LinkedIn, GitHub) will be configured per-user later.

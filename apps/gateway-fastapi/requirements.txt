@@ -1,0 +1,24 @@
+# FastAPI gateway sitting in Azure Container Apps; streams SSE to the UI
+
+# fastapi>=0.118.0,<0.119
+fastapi<0.117,>=0.116.1 # chainlit 2.8.3 requires <0.117
+uvicorn>=0.35.0,<0.38           # plain uvicorn (no [standard]) for Windows friendliness
+sse-starlette>=3.0.2,<4.0       # SSE helper used by FastAPI/Starlette
+httpx>=0.27,<1                  # outbound calls (LangGraph Cloud, JWKS, etc.)
+python-multipart==0.0.20        # required for form/file uploads in FastAPI
+python-jose[cryptography]>=3.5.0,<4.0  # validate Entra ID JWTs with JWKS
+cryptography>=46.0.2,<47        # crypto backend used by jose
+
+
+# Explanations:
+
+# FastAPI + Uvicorn are the standard ASGI pair; we use Uvicorn plain to avoid uvloop on Windows.
+
+# SSE streaming: sse-starlette’s EventSourceResponse is a clean way to push streamed tokens to Chainlit.
+
+# File uploads in FastAPI require python-multipart.
+
+# JWT verification for Microsoft Entra (OIDC) is typically done with JOSE/PyJWT + the tenant JWKS; this stack is widely used. (Docs show validating ID tokens and using JWKS endpoints.)
+
+# cryptography pinned to a modern release with fresh wheels.
+
