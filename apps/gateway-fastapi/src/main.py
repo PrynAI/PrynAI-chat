@@ -9,7 +9,7 @@ from langgraph_sdk import get_client
 
 app = FastAPI()
 
-LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]  
+LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]
 GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
 
 # RemoteGraph can be created via URL or client; we’ll use client for async stream
