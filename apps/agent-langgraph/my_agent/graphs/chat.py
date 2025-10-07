@@ -1,4 +1,4 @@
-# apps/agent-langgraph/src/prynai_agent/agent.py
+
 from typing import TypedDict, List
 from langgraph.graph import MessagesState, StateGraph, START
 from langchain_openai import ChatOpenAI
