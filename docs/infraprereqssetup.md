@@ -89,9 +89,9 @@ az role assignment create `
 ```
 
 # Use your real values instead of '...'
-az keyvault secret set --vault-name $KV --name "OPENAI--API--KEY" --value "..."
-az keyvault secret set --vault-name $KV --name "TAVILY--API--KEY" --value "..."
-az keyvault secret set --vault-name $KV --name "LANGSMITH--API--KEY" --value "..."
+az keyvault secret set --vault-name $KV --name "OPENAI-API-KEY" --value "..."
+az keyvault secret set --vault-name $KV --name "TAVILY-API-KEY" --value "..."
+az keyvault secret set --vault-name $KV --name "LANGSMITH-API-KEY" --value "..."
 
 
 With RBAC you grant identities roles like Key Vault Secrets User for read access; we’ll assign these to the Container Apps’ managed identities when we create the apps. 

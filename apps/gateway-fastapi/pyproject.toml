@@ -15,7 +15,8 @@ dependencies = [
   "python-jose[cryptography]>=3.3,<4",
   "cryptography>=46,<47",
   "langgraph>=0.6,<0.7",
-  "langgraph-sdk>=0.2.9,<0.3"
+  "langgraph-sdk>=0.2.9,<0.3",
+  "openai>=1.40.0,<2" # Moderation API, `from openai import OpenAI`
 ]
 
 [tool.hatch.build.targets.wheel]
