@@ -3,7 +3,7 @@ import chainlit as cl
 import httpx
 import os
 
-from .settings_websearch import inject_settings_ui, is_web_search_enabled  
+from settings_websearch import inject_settings_ui, is_web_search_enabled  
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 
