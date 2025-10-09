@@ -18,13 +18,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AnyMessage
 
 WEB_SEARCH_FLAG_KEY = "web_search"
-WEB_SEARCH_TOOL_NAME = "web_search"  # we name it explicitly so we can force it
+# WEB_SEARCH_TOOL_NAME = "web_search"  # we name it explicitly so we can force it
 
 # A single, crisp instruction to steer the model when search is enabled.
 SYSTEM_TIP_WHEN_SEARCH_ON = (
     "You have access to the web_search tool. "
-    "When the user requests current or time‑sensitive facts (e.g., 'today', 'now', 'current', "
-    "'latest', 'weather', 'price', 'score', 'release'), call web_search to gather up‑to‑date "
+    "When the user requests current or time-sensitive facts (e.g., 'today', 'now', 'current', "
+    "'latest', 'weather', 'price', 'score', 'release'), call web_search to gather up-to-date "
     "information before answering. Include the source URLs you used."
 )
 
@@ -59,11 +59,9 @@ def with_openai_web_search(llm: ChatOpenAI, *, force_specific_tool: bool) -> Cha
     """
     tools = [{
         "type": "web_search",
-        "name": WEB_SEARCH_TOOL_NAME,
-        "description": "Search the web for up-to-date information."
-    }]
+}]
     if force_specific_tool:
-        return llm.bind_tools(tools, tool_choice=WEB_SEARCH_TOOL_NAME)
+        return llm.bind_tools(tools, tool_choice="web_search")
     return llm.bind_tools(tools, tool_choice="Auto")
 
 def llm_and_messages_for_config(
