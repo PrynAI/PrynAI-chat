@@ -2,16 +2,16 @@
 from typing import Dict, Any
 from langgraph.graph import MessagesState, StateGraph, START
 from langchain_core.messages import AnyMessage
-# NEW: import the feature module
-from my_agent.features.web_search import llm_for_config
+from my_agent.features.web_search import llm_and_messages_for_config  # feature module
 
 class ChatState(MessagesState):
-    # MessagesState already provides: messages: list[AnyMessage]
+    # MessagesState already has: messages: list[AnyMessage]
     pass
 
 def chat_node(state: ChatState, config: Dict[str, Any] | None = None) -> dict:
-    llm = llm_for_config(config)
-    ai_msg = llm.invoke(state["messages"])
+    # Decide LLM + (optionally) prepend the system tip when web_search is ON.
+    llm, messages = llm_and_messages_for_config(config, state["messages"])
+    ai_msg = llm.invoke(messages)
     return {"messages": [ai_msg]}
 
 builder = StateGraph(ChatState)
