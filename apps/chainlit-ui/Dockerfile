@@ -5,4 +5,4 @@ COPY src ./src
 COPY chainlit.toml ./chainlit.toml
 RUN pip install --no-cache-dir hatchling && pip wheel -w /tmp/wheels . && pip install --no-cache-dir /tmp/wheels/*.whl
 EXPOSE 8000
-CMD ["chainlit", "run", "src/main.py", "--host=0.0.0.0", "--port=8000"]
+CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000"]

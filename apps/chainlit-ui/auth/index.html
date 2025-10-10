@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>PrynAI — Sign in</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script defer src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"></script>
+    <script defer src="./auth.config.js"></script>
+    <script defer src="./auth.js"></script>
+    <style>
+        body {
+            font: 16px system-ui;
+            margin: 2rem
+        }
+
+        pre {
+            background: #f6f8fa;
+            padding: 1rem;
+            border-radius: 6px
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Sign in to Chat PrynAI</h2>
+    <p>Click <b>Sign in</b> then we'll save your access and return you to chat.</p>
+    <div>
+        <button id="loginBtn">Sign in</button>
+        <button id="tokenBtn">Refresh token</button>
+        <button id="logoutBtn">Sign out</button>
+    </div>
+    <h3>Status</h3>
+    <pre id="status">(idle)</pre>
+</body>
+
+</html>
