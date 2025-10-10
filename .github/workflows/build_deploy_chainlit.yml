@@ -42,7 +42,7 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
-            az acr build -r $ACR_NAME -t $IMAGE apps/chainlit-ui
+            az acr build -r $ACR_NAME -t $IMAGE -f apps/chainlit-ui/Dockerfile .
 # ACR Tasks docs 
 # https: learn.microsoft.com/azure/container-registry/container-registry-tutorial-quick-task
 
