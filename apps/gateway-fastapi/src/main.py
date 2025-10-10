@@ -35,8 +35,11 @@ from openai import OpenAI
 
 # Feature: web search flag + input model
 from src.features.websearch import ChatIn, build_langgraph_config  # forwards toggle to config  :contentReference[oaicite:9]{index=9}
-# NEW: Profiles router + bootstrap helpers
+# Feature: Profiles router + bootstrap helpers
 from src.features.profiles import make_profiles_router, ensure_profile
+
+# Feature: Threads router 
+from src.features.threads import make_threads_router
 
 # Auth: Entra External ID (CIAM) token validation
 from src.auth.entra import get_current_user, user_id_from_claims, AuthError
@@ -73,6 +76,10 @@ remote = RemoteGraph(GRAPH_NAME, client=client)
 # ---------- Mount /api/profile ----------
 # Profiles are stored in LangGraph Store under ["users", <user_id>].
 app.include_router(make_profiles_router(client, get_current_user, user_id_from_claims))
+
+
+# ---------- Mount /api/threads ----------
+app.include_router(make_threads_router(client, get_current_user, user_id_from_claims))
 
 # ---------- Helpers (unchanged streaming parsing) ----------
 def _blocks_to_text(blocks: Any) -> str:
@@ -142,6 +149,9 @@ async def whoami(request: Request):
     if not claims:
         raise HTTPException(status_code=401, detail="unauthenticated")
     return {"sub": claims.get("sub"), "iss": claims.get("iss"), "aud": claims.get("aud")}
+
+
+
 
 # ---------- Chat stream (SSE) ----------
 @app.post("/api/chat/stream")
