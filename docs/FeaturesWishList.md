@@ -1,9 +1,20 @@
 Functional Features:
 
 Must Have
-- Chat reponses with reasoning
-- Internet Search(OpenAI-"web-search")
-- security gaurdrails - OpenAI moderation model
+- Chat reponses with reasoning  - Done 
+- Internet Search(OpenAI-"web-search") - Done 
+- security gaurdrails - OpenAI moderation model - Done
+- Microsoft entra external id setup with oauth 2.0 authentication with email and google - Done - Documentation-Not Done
+
+
+- Profiles (Gateway) — create/read user profile in LangGraph Store
+- Threads API (Gateway) — create & list
+- UI bridge for tokens — minimal first, elegant later
+- Agent: enable the checkpointer (short‑term memory)
+- History pane (UI)
+- Long‑term memory (after threads & history)
+
+
 
 - Chat Persistance-InSession memory (ShortTerm memory)
 - when closing the chat and reopening the chat session memory, should persist (LongTerm Memory)

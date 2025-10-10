@@ -1,20 +1,21 @@
 # apps/gateway-fastapi/src/main.py
 # Production-ready FastAPI gateway:
 # - Validates Microsoft Entra External ID (CIAM) access tokens
-# - Streams model output to the UI via SSE (unchanged from your MVP-0)
+# - Streams model output to the UI via SSE (unchanged from MVP-0)
 # - Forwards web_search and thread_id to LangGraph
 # - Adds CORS for localhost + your chat domain
+# - NEW: /api/profile routes backed by LangGraph Store (durable user profile)
 #
-# Env required (see bottom of file header for details):
+# Env required:
 #   OIDC_DISCOVERY_URL = https://<subdomain>.ciamlogin.com/<tenant-id>/v2.0/.well-known/openid-configuration
-#   OIDC_AUDIENCE      = api://<GATEWAY_API_APP_ID>/chat.fullaccess   (or the API app client id)
-#   LANGGRAPH_URL, LANGGRAPH_GRAPH
+#   OIDC_AUDIENCE      = <Gateway API client ID GUID>     # You confirmed GUID works best
+#   LANGGRAPH_URL, LANGGRAPH_GRAPH=chat
 #   MODERATION_ENABLED=true|false, MODERATION_MODEL=omni-moderation-latest
 #
 # References:
-# - Streaming + payload shape preserved from prior gateway main.py (MVP-0).  [repo]
-# - Web search toggle forwarded via src.features.websearch.                  [repo]
-# - JWT validation helper in src.auth.entra (policy-agnostic discovery).     [module]
+# - LangGraph streaming (astream, stream_mode="messages"). :contentReference[oaicite:6]{index=6}
+# - FastAPI CORS middleware. :contentReference[oaicite:7]{index=7}
+# - LangGraph SDK, Store operations (get_item/put_item). :contentReference[oaicite:8]{index=8}
 
 from __future__ import annotations
 
@@ -33,17 +34,17 @@ from langgraph_sdk import get_client
 from openai import OpenAI
 
 # Feature: web search flag + input model
-from src.features.websearch import ChatIn, build_langgraph_config  # :contentReference[oaicite:4]{index=4}
+from src.features.websearch import ChatIn, build_langgraph_config  # forwards toggle to config  :contentReference[oaicite:9]{index=9}
+# NEW: Profiles router + bootstrap helpers
+from src.features.profiles import make_profiles_router, ensure_profile
 
 # Auth: Entra External ID (CIAM) token validation
 from src.auth.entra import get_current_user, user_id_from_claims, AuthError
 
 # ---------- FastAPI app ----------
-app = FastAPI(title="PrynAI Gateway", version="1.0")
+app = FastAPI(title="PrynAI Gateway", version="1.1")
 
 # ---------- CORS (UI origins) ----------
-# Allow your local SPA test and the production UI domain.
-# FastAPI/Starlette CORSMiddleware is the documented way to enable CORS. :contentReference[oaicite:5]{index=5}
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://chat.prynai.com",
@@ -62,14 +63,18 @@ MOD_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() == "true"
 MOD_MODEL = os.getenv("MODERATION_MODEL", "omni-moderation-latest")
 
 # ---------- LangGraph remote config ----------
-# Matches your repo docs & langgraph.json mapping ("chat"). 
+# Matches your repo docs & langgraph.json mapping ("chat"). :contentReference[oaicite:10]{index=10}
 LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]
 GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
 
 client = get_client(url=LANGGRAPH_URL)
 remote = RemoteGraph(GRAPH_NAME, client=client)
 
-# ---------- Helpers (unchanged logic, kept for streaming stability) ----------
+# ---------- Mount /api/profile ----------
+# Profiles are stored in LangGraph Store under ["users", <user_id>].
+app.include_router(make_profiles_router(client, get_current_user, user_id_from_claims))
+
+# ---------- Helpers (unchanged streaming parsing) ----------
 def _blocks_to_text(blocks: Any) -> str:
     if isinstance(blocks, str):
         return blocks
@@ -133,15 +138,10 @@ async def whoami(request: Request):
     try:
         claims = await get_current_user(request)
     except AuthError as e:
-        # HTTP 401 for simple JSON route
         raise HTTPException(status_code=401, detail=str(e))
     if not claims:
         raise HTTPException(status_code=401, detail="unauthenticated")
-    return {
-        "sub": claims.get("sub"),
-        "iss": claims.get("iss"),
-        "aud": claims.get("aud"),
-    }
+    return {"sub": claims.get("sub"), "iss": claims.get("iss"), "aud": claims.get("aud")}
 
 # ---------- Chat stream (SSE) ----------
 @app.post("/api/chat/stream")
@@ -151,8 +151,9 @@ async def stream_chat(payload: ChatIn, request: Request):
     - Requires a valid CIAM access token (unless AUTH_DEV_BYPASS=true with X-Debug-Sub).
     - Forwards web_search + thread_id to the LangGraph config.
     - Attaches 'user_id' from token claims to config so the agent can scope memory later.
+    - NEW: auto-ensure a profile exists for this user.
     """
-    # 1) AUTHN: require valid token (External ID access token)
+    # 1) AUTHN
     try:
         claims = await get_current_user(request)
     except AuthError as e:
@@ -171,14 +172,22 @@ async def stream_chat(payload: ChatIn, request: Request):
             yield b"data: [DONE]\n\n"
         return StreamingResponse(noauth_stream(), media_type="text/event-stream")
 
+    user_id = user_id_from_claims(claims)
+
     # 2) Build LangGraph config (thread_id + web_search) and attach user_id
-    config = build_langgraph_config(payload)                    # :contentReference[oaicite:7]{index=7}
-    config.setdefault("configurable", {})["user_id"] = user_id_from_claims(claims)
+    config = build_langgraph_config(payload)
+    config.setdefault("configurable", {})["user_id"] = user_id
+
+    # 2b) Ensure a profile exists (non-fatal on failure)
+    try:
+        await ensure_profile(client, user_id, claims=claims)
+    except Exception:
+        pass
 
     # 3) Prepare user message
     user_msg = {"role": "user", "content": payload.message}
 
-    # 4) Input moderation (kept from MVP-0)
+    # 4) Input moderation
     if MOD_ENABLED:
         try:
             _moderate_or_raise(payload.message)
@@ -198,9 +207,8 @@ async def stream_chat(payload: ChatIn, request: Request):
             async for item in remote.astream(
                 {"messages": [user_msg]},
                 config=config,
-                stream_mode="messages",
+                stream_mode="messages",  # LangGraph streaming mode for chat tokens  :contentReference[oaicite:11]{index=11}
             ):
-                # Astream can yield (node_name, msg) or msg depending on mode; be tolerant
                 msg_chunk = item[0] if isinstance(item, tuple) and len(item) == 2 else item
                 text = _chunk_to_text(msg_chunk)
                 if text:
@@ -208,8 +216,6 @@ async def stream_chat(payload: ChatIn, request: Request):
                     safe = text.replace("\r\n", "\n").replace("\r", "\n")
                     for line in safe.split("\n"):
                         yield f"data: {line}\n\n".encode("utf-8")
-
-            # Output moderation (best-effort, post-stream)
             if MOD_ENABLED and acc:
                 try:
                     out = "".join(acc)
@@ -218,7 +224,6 @@ async def stream_chat(payload: ChatIn, request: Request):
                         yield b"event: policy\n"
                         yield b"data: A safety filter replaced part of the output.\n\n"
                 except Exception:
-                    # Non-fatal; continue to finalize stream
                     pass
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
