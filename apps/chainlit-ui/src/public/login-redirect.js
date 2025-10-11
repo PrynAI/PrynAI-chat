@@ -5,10 +5,9 @@
         if (p === "/chat/login") {
             if (sessionStorage.getItem("pry_auth_just_logged") === "1") {
                 sessionStorage.removeItem("pry_auth_just_logged");
-                return; // let Chainlit finish loading right after login
+                return; // allow Chainlit to finish loading
             }
-            // Tell the /auth page we just logged out so it won’t auto-silent sign-in.
-            window.location.replace("/auth/?loggedout=1");
+            window.location.replace("/auth/");
         }
     } catch (_) { }
 })();
