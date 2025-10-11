@@ -1,5 +1,3 @@
-// 
-
 
 // apps/chainlit-ui/src/auth/auth.config.js
 // Fill with real values from Entra External ID (CIAM)
