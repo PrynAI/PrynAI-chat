@@ -1,4 +1,3 @@
-# apps/chainlit-ui/src/server.py
 from __future__ import annotations
 
 import os
@@ -7,7 +6,7 @@ from importlib.resources import files as pkg_files
 
 import chainlit as cl
 from chainlit.utils import mount_chainlit
-from fastapi import FastAPI, Response, Request
+from fastapi import FastAPI, Response
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,7 +36,7 @@ def _find_auth_dir() -> str:
     raise RuntimeError(f"Auth assets not found. Tried: {candidates}")
 
 AUTH_DIR = _find_auth_dir()
-# Mounted static app owns all subpaths of /auth (by design).
+# Mounted static app owns all subpaths of /auth.
 app.mount("/auth", StaticFiles(directory=AUTH_DIR, html=True), name="auth")
 
 @app.get("/")
@@ -51,8 +50,13 @@ async def save_token(body: Dict[str, str], response: Response):
     if not tok:
         return JSONResponse({"ok": False, "error": "missing_token"}, status_code=400)
     response.set_cookie(
-        key=APP_COOKIE, value=tok, httponly=True, secure=True,
-        samesite="lax", max_age=3600, path="/",
+        key=APP_COOKIE,
+        value=tok,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=3600,
+        path="/",
     )
     return {"ok": True}
 
@@ -69,19 +73,30 @@ def _parse_cookies(cookie_header: Optional[str]) -> Dict[str, str]:
     for part in cookie_header.split(";"):
         if "=" in part:
             k, v = part.split("=", 1)
+            jar[k].strip()
             jar[k.strip()] = v.strip()
     return jar
 
 @cl.header_auth_callback
 def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
+    """
+    Called by Chainlit on auth checks.
+    IMPORTANT: Do not touch cl.user_session here (no WebSocket context).
+    Return a cl.User if authenticated; None to fail. 401 → /chat/login. 
+    """
     cookie = headers.get("cookie") or headers.get("Cookie")
     has_cookie = cookie and ("prynai_at=" in cookie)
     print(f"[auth] header_auth_callback: has_cookie={bool(has_cookie)}", flush=True)
+
     token = _parse_cookies(cookie).get(APP_COOKIE)
     if not token:
         return None
-    cl.user_session.set("access_token", token)
-    return cl.User(identifier="extern-id-user", metadata={"src": "cookie"})
+
+    # Attach the access token to user metadata so handlers can read it later.
+    return cl.User(
+        identifier="extern-id-user",
+        metadata={"src": "cookie", "access_token": token},
+    )
 
 # ---------- Mount Chainlit at /chat ----------
 def _find_chainlit_target() -> str:

@@ -1,7 +1,6 @@
-# apps/chainlit-ui/src/main.py
-import chainlit as cl
-import httpx
 import os
+import httpx
+import chainlit as cl
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
 
@@ -10,7 +9,8 @@ GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 @cl.on_chat_start
 async def start():
     await inject_settings_ui()
-    if not cl.user_session.get("access_token"):
+    app_user = cl.user_session.get("user")  # set by Chainlit after auth succeeds
+    if not app_user:
         await cl.Message(
             content="You're not signed in. [Click here to sign in](/auth) then return to chat."
         ).send()
@@ -22,17 +22,20 @@ async def handle_message(message: cl.Message):
     endpoint = f"{GATEWAY_BASE}/api/chat/stream"
     payload = {
         "message": message.content,
-        "thread_id": None,  # will be set once threads UI is added
+        "thread_id": None,  # hook threads later
         "web_search": is_web_search_enabled(),
     }
+
+    # Pull the Entra access token from the authenticated user metadata.
+    app_user = cl.user_session.get("user")
+    token = None
+    if app_user and getattr(app_user, "metadata", None):
+        token = app_user.metadata.get("access_token")
 
     out = cl.Message(content="")
     await out.send()
 
-    token = cl.user_session.get("access_token")
-    headers = {
-        "accept": "text/event-stream",
-    }
+    headers = {"accept": "text/event-stream"}
     if token:
         headers["authorization"] = f"Bearer {token}"
 
