@@ -75,6 +75,8 @@ def _parse_cookies(cookie_header: Optional[str]) -> Dict[str, str]:
 @cl.header_auth_callback
 def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     cookie = headers.get("cookie") or headers.get("Cookie")
+    has_cookie = cookie and ("prynai_at=" in cookie)
+    print(f"[auth] header_auth_callback: has_cookie={bool(has_cookie)}", flush=True)
     token = _parse_cookies(cookie).get(APP_COOKIE)
     if not token:
         return None
