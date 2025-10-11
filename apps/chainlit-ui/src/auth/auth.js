@@ -3,8 +3,7 @@
     const C = window.PRYNAI_AUTH;
 
     // Preferred: authority includes policy (user-flow). If C.policy is falsy, use tenant-only.
-    const base = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}`;
-    const authority = C.policy && C.policy.trim() ? `${base}/${C.policy}/` : `${base}/`;
+    const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
 
     const msalConfig = {
         auth: {
