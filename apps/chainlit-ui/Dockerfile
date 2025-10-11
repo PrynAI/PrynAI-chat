@@ -14,4 +14,4 @@ EXPOSE 8000
 
 # Switch into src so uvicorn can import server.py cleanly
 WORKDIR /app/apps/chainlit-ui/src
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000"]

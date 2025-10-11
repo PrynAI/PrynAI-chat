@@ -6,6 +6,7 @@ from typing import Optional, Dict
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, JSONResponse
+from importlib.resources import files as pkg_files
 
 from chainlit.utils import mount_chainlit
 import chainlit as cl
@@ -23,8 +24,15 @@ APP_COOKIE = "prynai_at"
 app = FastAPI(title="PrynAI Chat UI (with MSAL)")
 
 # 1) Serve the MSAL SPA under /auth
-AUTH_DIR = os.path.join(os.path.dirname(__file__), "..", "auth")
+from importlib.resources import files as pkg_files
+
+# If your package root is `src`, this will resolve src/auth inside the package
+pkg_root = __package__.split(".")[0] if __package__ else "src"
+res = pkg_files(pkg_root).joinpath("auth")
+AUTH_DIR = str(res)
+
 app.mount("/auth", StaticFiles(directory=AUTH_DIR, html=True), name="auth")
+
 
 @app.get("/")
 def _root():
