@@ -2,9 +2,12 @@
 (async () => {
     const C = window.PRYNAI_AUTH;
 
-    // Tenant-level CIAM authority that matches discovery working in your tenant
-    // e.g. https://chatprynai.ciamlogin.com/bff9cd6e-.../v2.0/.well-known/openid-configuration
+    // Tenant-level CIAM authority that matches your working discovery document.
     const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
+
+    // Disable auto-silent on page load; only sign in when user clicks the button
+    // or when we come back right after a successful login.
+    const AUTO_SIGNIN_ON_LOAD = false;
 
     const msalConfig = {
         auth: {
@@ -12,7 +15,7 @@
             authority,
             knownAuthorities: [`${C.tenantSubdomain}.ciamlogin.com`],
             redirectUri: C.redirectUri,
-            postLogoutRedirectUri: C.postLogoutRedirectUri, // we’ll override per-call on logout to stamp ?loggedout=1
+            postLogoutRedirectUri: C.postLogoutRedirectUri, // overridden per-call on logout
             navigateToLoginRequestUrl: false
         },
         cache: { cacheLocation: "localStorage" }
@@ -22,11 +25,9 @@
     const $ = (id) => document.getElementById(id);
     const set = (txt) => { const el = $("status"); if (el) el.textContent = txt; };
 
-    // --- Helpers --------------------------------------------------------------
-
     function justLoggedOut() {
-        const p = new URLSearchParams(location.search);
-        if (p.get("loggedout") === "1") return true;
+        const q = new URLSearchParams(location.search);
+        if (q.get("loggedout") === "1") return true;
         if (sessionStorage.getItem("pry_logged_out") === "1") {
             sessionStorage.removeItem("pry_logged_out");
             return true;
@@ -45,14 +46,12 @@
     }
 
     async function establishChainlitSession(accessToken) {
-        // 1) Preferred: explicitly create Chainlit session via header-auth endpoint.
+        // Create Chainlit session via header-auth, then verify.
         let r = await fetch("/chat/auth/header", {
             method: "POST",
             credentials: "include",
             headers: { "Authorization": `Bearer ${accessToken}` }
         });
-        // 2) Verify the session exists (and prime the UI) before we navigate.
-        //    On this GET we still send Authorization as a belt-and-suspenders.
         if (r.ok) {
             const v = await fetch("/chat/user", {
                 method: "GET",
@@ -65,7 +64,6 @@
     }
 
     function goToChat() {
-        // Prevent /chat/login -> /auth -> /chat loop
         sessionStorage.setItem("pry_auth_just_logged", "1");
         set("Authenticated. Opening chat…");
         window.location.replace("/chat/");
@@ -84,10 +82,9 @@
         goToChat();
     }
 
-    // --- Page bootstrap -------------------------------------------------------
-
+    // ---------- Page bootstrap ----------
     try {
-        // If this is the post-logout SPA load, do NOT auto-login silently.
+        // If we just logged out, stop here (don’t auto-login).
         if (justLoggedOut()) {
             set("Signed out. Click Sign in to continue.");
             return;
@@ -97,7 +94,11 @@
         const acct = result?.account || app.getActiveAccount() || app.getAllAccounts()[0];
         if (result?.account && !app.getActiveAccount()) app.setActiveAccount(result.account);
 
-        if (acct) {
+        // Only resume silently if we explicitly allow it or we just returned from login.
+        const resume = sessionStorage.getItem("pry_auth_just_logged") === "1";
+        sessionStorage.removeItem("pry_auth_just_logged");
+
+        if ((AUTO_SIGNIN_ON_LOAD || resume) && acct) {
             try {
                 await acquireAndBridge(acct);
                 return;
@@ -134,11 +135,14 @@
         try {
             // Clear our app cookie immediately
             await fetch("/_auth/logout", { method: "POST", credentials: "same-origin" });
+
             // Mark this navigation so we skip silent login on /auth
             sessionStorage.setItem("pry_logged_out", "1");
+
             set("Signing out…");
-            // Hint MSAL/CIAM which account to end and land on /auth?loggedout=1
             const account = app.getActiveAccount() || app.getAllAccounts()[0] || undefined;
+
+            // Provide account so MSAL adds logout_hint; land on /auth?loggedout=1
             await app.logoutRedirect({
                 authority,
                 account,

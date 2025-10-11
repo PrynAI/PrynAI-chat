@@ -1,4 +1,3 @@
-# apps/chainlit-ui/src/server.py
 from __future__ import annotations
 
 import os, json, base64
@@ -38,10 +37,12 @@ def _find_auth_dir() -> str:
     raise RuntimeError(f"Auth assets not found. Tried: {candidates}")
 
 AUTH_DIR = _find_auth_dir()
+# Serve our MSAL SPA at /auth (and subpaths)
 app.mount("/auth", StaticFiles(directory=AUTH_DIR, html=True), name="auth")
 
 @app.get("/")
 def _root():
+    # Always land on chat
     return RedirectResponse(url="/chat/")
 
 # ---------- Token bridge API ----------
@@ -66,28 +67,11 @@ async def save_token(body: Dict[str, str], response: Response):
 
 @app.post(LOGOUT_API)
 async def logout(response: Response):
-    """Clear the HttpOnly access-token cookie for both host-only and domain-scoped cases."""
-    domain = os.getenv("COOKIE_DOMAIN") or None
-
-    # 1) Delete the host-only cookie (no Domain attribute)
+    # Clear with and without domain to be robust
     response.delete_cookie(APP_COOKIE, path="/")
-
-    # 2) If we set a Domain cookie, delete that variant too
+    domain = os.getenv("COOKIE_DOMAIN")
     if domain:
-        response.delete_cookie(APP_COOKIE, path="/", domain=domain)
-
-    # 3) Overwrite with an expired cookie (defensive)
-    response.set_cookie(
-        key=APP_COOKIE,
-        value="",
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=0,
-        expires=0,
-        path="/",
-        domain=domain
-    )
+        response.delete_cookie(APP_COOKIE, domain=domain, path="/")
     return {"ok": True}
 
 # ---------- Helpers ----------
@@ -113,14 +97,17 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     cookie = headers.get("cookie") or headers.get("Cookie")
     token = _parse_cookies(cookie).get(APP_COOKIE) if cookie else None
 
-    # Defensive: accept Bearer for the very first probe as well.
+    # Defensive: accept Bearer on the very first probe too.
     if not token:
         authz = headers.get("authorization") or headers.get("Authorization")
         if authz and authz.lower().startswith("bearer "):
             token = authz.split(" ", 1)[1]
 
-    print(f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in (cookie or ''))}; "
-          f"has_authz={'authorization' in {k.lower() for k in (headers or {}).keys()}}", flush=True)
+    print(
+        f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in (cookie or ''))}; "
+        f"has_authz={'authorization' in {k.lower() for k in (headers or {}).keys()}}",
+        flush=True,
+    )
 
     if not token:
         return None
@@ -135,7 +122,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     )
     meta = {
         "src": "cookie_or_header",
-        "access_token": token,   # Chainlit stores this on cl.user_session["user"].metadata
+        "access_token": token,   # Chainlit will store this on cl.user_session["user"].metadata
         "sub": claims.get("sub"),
         "name": claims.get("name"),
         "email": claims.get("email"),
@@ -147,11 +134,10 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
 
 @cl.on_logout
 async def _on_logout(request: Request, response: Response):
-    """Ensure Chainlit’s own logout also clears both cookie variants."""
-    domain = os.getenv("COOKIE_DOMAIN") or None
     response.delete_cookie(APP_COOKIE, path="/")
+    domain = os.getenv("COOKIE_DOMAIN")
     if domain:
-        response.delete_cookie(APP_COOKIE, path="/", domain=domain)
+        response.delete_cookie(APP_COOKIE, domain=domain, path="/")
 
 # ---------- Mount Chainlit at /chat ----------
 def _find_chainlit_target() -> str:

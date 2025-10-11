@@ -66,7 +66,28 @@ async def save_token(body: Dict[str, str], response: Response):
 
 @app.post(LOGOUT_API)
 async def logout(response: Response):
+    """Clear the HttpOnly access-token cookie for both host-only and domain-scoped cases."""
+    domain = os.getenv("COOKIE_DOMAIN") or None
+
+    # 1) Delete the host-only cookie (no Domain attribute)
     response.delete_cookie(APP_COOKIE, path="/")
+
+    # 2) If we set a Domain cookie, delete that variant too
+    if domain:
+        response.delete_cookie(APP_COOKIE, path="/", domain=domain)
+
+    # 3) Overwrite with an expired cookie (defensive)
+    response.set_cookie(
+        key=APP_COOKIE,
+        value="",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=0,
+        expires=0,
+        path="/",
+        domain=domain
+    )
     return {"ok": True}
 
 # ---------- Helpers ----------
@@ -126,7 +147,11 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
 
 @cl.on_logout
 async def _on_logout(request: Request, response: Response):
+    """Ensure Chainlit’s own logout also clears both cookie variants."""
+    domain = os.getenv("COOKIE_DOMAIN") or None
     response.delete_cookie(APP_COOKIE, path="/")
+    if domain:
+        response.delete_cookie(APP_COOKIE, path="/", domain=domain)
 
 # ---------- Mount Chainlit at /chat ----------
 def _find_chainlit_target() -> str:
