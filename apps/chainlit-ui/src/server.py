@@ -93,20 +93,22 @@ def _jwt_claims_unverified(token: str) -> Dict[str, str]:
 # ---------- Chainlit header-auth bridge ----------
 @cl.header_auth_callback
 def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
-    """
-    Called by Chainlit on auth checks. Return a cl.User if authenticated; None to fail.
-    Docs: https://docs.chainlit.io/authentication/header
-    """
     cookie = headers.get("cookie") or headers.get("Cookie")
-    has_cookie = cookie and (f"{APP_COOKIE}=" in cookie)
-    print(f"[auth] header_auth_callback: has_cookie={bool(has_cookie)}", flush=True)
+    token = _parse_cookies(cookie).get(APP_COOKIE) if cookie else None
 
-    token = _parse_cookies(cookie).get(APP_COOKIE)
+    # NEW: accept a Bearer token on the very first probe from /auth (defensive only)
+    if not token:
+        authz = headers.get("authorization") or headers.get("Authorization")
+        if authz and authz.lower().startswith("bearer "):
+            token = authz.split(" ", 1)[1]
+
+    print(f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in cookie)}; "
+          f"has_authz={'authorization' in (headers or {})}", flush=True)
+
     if not token:
         return None
 
     claims = _jwt_claims_unverified(token)
-    # Prefer human-friendly identifier for the top-right UI
     identifier = (
         claims.get("name")
         or claims.get("email")
@@ -114,10 +116,8 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         or claims.get("sub")
         or "user"
     )
-
-    # Attach access token + useful claims to metadata so handlers can use them.
     meta = {
-        "src": "cookie",
+        "src": "cookie_or_header",
         "access_token": token,
         "sub": claims.get("sub"),
         "name": claims.get("name"),
@@ -126,7 +126,6 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
     }
-
     return cl.User(identifier=identifier, metadata=meta)
 
 # Clear our cookie when the built-in Chainlit logout is used.
