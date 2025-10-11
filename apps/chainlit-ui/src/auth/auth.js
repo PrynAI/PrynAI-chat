@@ -3,7 +3,7 @@
     const C = window.PRYNAI_AUTH;
 
     // IMPORTANT: include the user flow (policy) in authority for CIAM/B2C
-    const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/${C.policy}/`;
+    const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
     const msalConfig = {
         auth: {
             clientId: C.spaClientId,
