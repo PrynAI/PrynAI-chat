@@ -38,20 +38,20 @@ def _find_auth_dir() -> str:
     raise RuntimeError(f"Auth assets not found. Tried: {candidates}")
 
 AUTH_DIR = _find_auth_dir()
-# Serve our MSAL SPA at /auth (and all its subpaths)
 app.mount("/auth", StaticFiles(directory=AUTH_DIR, html=True), name="auth")
 
 @app.get("/")
 def _root():
-    # Always land on the chat
     return RedirectResponse(url="/chat/")
 
-# ---------- Token bridge API (NOT under /auth) ----------
+# ---------- Token bridge API ----------
 @app.post(TOKEN_API)
 async def save_token(body: Dict[str, str], response: Response):
     tok = (body or {}).get("access_token")
     if not tok:
         return JSONResponse({"ok": False, "error": "missing_token"}, status_code=400)
+
+    domain = os.getenv("COOKIE_DOMAIN")  # e.g., "chat.prynai.com"
     response.set_cookie(
         key=APP_COOKIE,
         value=tok,
@@ -60,12 +60,12 @@ async def save_token(body: Dict[str, str], response: Response):
         samesite="lax",
         max_age=3600,
         path="/",
+        domain=domain if domain else None,
     )
     return {"ok": True}
 
 @app.post(LOGOUT_API)
 async def logout(response: Response):
-    # Clear our HttpOnly access-token cookie
     response.delete_cookie(APP_COOKIE, path="/")
     return {"ok": True}
 
@@ -76,10 +76,6 @@ def _parse_cookies(cookie_header: Optional[str]) -> Dict[str, str]:
     return {k: morsel.value for k, morsel in c.items()}
 
 def _jwt_claims_unverified(token: str) -> Dict[str, str]:
-    """
-    Decode JWT payload without verifying signature. Good enough to read display claims.
-    Access token is already validated by the Gateway on API calls.
-    """
     try:
         parts = token.split(".")
         if len(parts) < 2:
@@ -96,14 +92,14 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     cookie = headers.get("cookie") or headers.get("Cookie")
     token = _parse_cookies(cookie).get(APP_COOKIE) if cookie else None
 
-    # NEW: accept a Bearer token on the very first probe from /auth (defensive only)
+    # Defensive: accept Bearer for the very first probe as well.
     if not token:
         authz = headers.get("authorization") or headers.get("Authorization")
         if authz and authz.lower().startswith("bearer "):
             token = authz.split(" ", 1)[1]
 
-    print(f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in cookie)}; "
-          f"has_authz={'authorization' in (headers or {})}", flush=True)
+    print(f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in (cookie or ''))}; "
+          f"has_authz={'authorization' in {k.lower() for k in (headers or {}).keys()}}", flush=True)
 
     if not token:
         return None
@@ -118,7 +114,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     )
     meta = {
         "src": "cookie_or_header",
-        "access_token": token,
+        "access_token": token,   # Chainlit stores this on cl.user_session["user"].metadata
         "sub": claims.get("sub"),
         "name": claims.get("name"),
         "email": claims.get("email"),
@@ -128,8 +124,6 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     }
     return cl.User(identifier=identifier, metadata=meta)
 
-# Clear our cookie when the built-in Chainlit logout is used.
-# Docs: https://docs.chainlit.io/api-reference/lifecycle-hooks/on-logout
 @cl.on_logout
 async def _on_logout(request: Request, response: Response):
     response.delete_cookie(APP_COOKIE, path="/")

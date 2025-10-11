@@ -2,7 +2,7 @@
 (async () => {
     const C = window.PRYNAI_AUTH;
 
-    // Preferred: authority includes policy (user-flow). If C.policy is falsy, use tenant-only.
+    // Your tenant-level CIAM authority (no policy segment).
     const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
 
     const msalConfig = {
@@ -24,45 +24,44 @@
     async function saveAccessToken(accessToken) {
         const resp = await fetch("/_auth/token", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
             credentials: "same-origin",
             body: JSON.stringify({ access_token: accessToken })
         });
         return resp.ok;
     }
 
-    async function clearCookie() {
-        try { await fetch("/_auth/logout", { method: "POST", credentials: "same-origin" }); } catch { }
+    function goToChat() {
+        set("Authenticated. Opening chat…");
+        window.location.replace("/chat/");
     }
 
-    async function verifyAndGoWithAuth(accessToken) {
-        // On this first probe, send Authorization too.
-        const r = await fetch("/chat/user", {
-            method: "GET",
-            credentials: "include",
-            headers: accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}
-        });
-        if (r.status === 200) {
-            set("Authenticated. Opening chat…");
-            window.location.replace("/chat/");
-        } else {
-            set(`Saved token but header auth failed (${r.status}). Check server logs.`);
+    async function refreshSilentlyAndGo() {
+        const acct = app.getActiveAccount() || app.getAllAccounts()[0];
+        if (!acct) return set("Sign in first.");
+        try {
+            const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
+            if (await saveAccessToken(res.accessToken)) {
+                goToChat();
+            } else {
+                set("Saving token failed.");
+            }
+        } catch (e) {
+            console.warn("Silent failed; falling back to redirect", e);
+            await app.acquireTokenRedirect({ scopes: [C.apiScope], authority });
         }
     }
 
     try {
+        // Complete any redirect, then try silent token (fresh or cached).
         const result = await app.handleRedirectPromise();
         const acct = result?.account || app.getActiveAccount() || app.getAllAccounts()[0];
-
-        if (result?.account && !app.getActiveAccount()) {
-            app.setActiveAccount(result.account);
-        }
-
+        if (result?.account && !app.getActiveAccount()) app.setActiveAccount(result.account);
         if (acct) {
             try {
                 const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
                 if (await saveAccessToken(res.accessToken)) {
-                    await verifyAndGoWithAuth(res.accessToken);
+                    goToChat();
                     return;
                 }
                 set("Token acquired but saving failed.");
@@ -85,30 +84,16 @@
         }
     };
 
+    $("tokenBtn").onclick = refreshSilentlyAndGo;
+
     $("logoutBtn").onclick = async () => {
         try {
-            await clearCookie();
+            await fetch("/_auth/logout", { method: "POST", credentials: "same-origin" });
             set("Signing out…");
             await app.logoutRedirect({ authority });
         } catch (e) {
             console.error("logoutRedirect failed", e);
             set(`Logout failed: ${e?.errorCode || e?.message || e}`);
-        }
-    };
-
-    $("tokenBtn").onclick = async () => {
-        const acct = app.getActiveAccount() || app.getAllAccounts()[0];
-        if (!acct) return set("Sign in first.");
-        try {
-            const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
-            if (await saveAccessToken(res.accessToken)) {
-                await verifyAndGoWithAuth(res.accessToken);
-            } else {
-                set("Saving token failed.");
-            }
-        } catch (e) {
-            console.warn("Silent failed; falling back to redirect", e);
-            await app.acquireTokenRedirect({ scopes: [C.apiScope], authority });
         }
     };
 
