@@ -9,6 +9,7 @@ from chainlit.utils import mount_chainlit
 from fastapi import FastAPI, Response
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from http.cookies import SimpleCookie
 
 APP_COOKIE = "prynai_at"
 TOKEN_API = "/_auth/token"
@@ -67,15 +68,9 @@ async def logout(response: Response):
 
 # ---------- Chainlit header-auth bridge ----------
 def _parse_cookies(cookie_header: Optional[str]) -> Dict[str, str]:
-    jar: Dict[str, str] = {}
-    if not cookie_header:
-        return jar
-    for part in cookie_header.split(";"):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            jar[k].strip()
-            jar[k.strip()] = v.strip()
-    return jar
+    c = SimpleCookie()
+    c.load(cookie_header or "")
+    return {k: morsel.value for k, morsel in c.items()}
 
 @cl.header_auth_callback
 def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
