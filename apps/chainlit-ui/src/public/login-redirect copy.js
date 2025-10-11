@@ -3,14 +3,11 @@
     try {
         var p = window.location.pathname;
         if (p === "/chat/login") {
-            // If we just finished logging in, allow Chainlit to mount once.
             if (sessionStorage.getItem("pry_auth_just_logged") === "1") {
                 sessionStorage.removeItem("pry_auth_just_logged");
-                return;
+                return; // allow Chainlit to finish loading
             }
-            // Coming from Chainlit's logout → ensure /auth does NOT silently log back in.
-            sessionStorage.setItem("pry_logged_out", "1");
-            window.location.replace("/auth/?loggedout=1");
+            window.location.replace("/auth/");
         }
     } catch (_) { }
 })();

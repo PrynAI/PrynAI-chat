@@ -2,9 +2,12 @@
 (async () => {
     const C = window.PRYNAI_AUTH;
 
-    // Tenant-level CIAM authority that matches your working discovery URL.
-    // e.g. https://chatprynai.ciamlogin.com/<tenantId>/
+    // Tenant-level CIAM authority that matches your working discovery document.
     const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
+
+    // Disable auto-silent on page load; only sign in when user clicks the button
+    // or when we come back right after a successful login.
+    const AUTO_SIGNIN_ON_LOAD = false;
 
     const msalConfig = {
         auth: {
@@ -12,7 +15,7 @@
             authority,
             knownAuthorities: [`${C.tenantSubdomain}.ciamlogin.com`],
             redirectUri: C.redirectUri,
-            postLogoutRedirectUri: C.postLogoutRedirectUri, // we'll add ?loggedout=1 at call-site
+            postLogoutRedirectUri: C.postLogoutRedirectUri, // overridden per-call on logout
             navigateToLoginRequestUrl: false
         },
         cache: { cacheLocation: "localStorage" }
@@ -20,13 +23,11 @@
 
     const app = new msal.PublicClientApplication(msalConfig);
     const $ = (id) => document.getElementById(id);
-    const set = (t) => { const el = $("status"); if (el) el.textContent = t; };
-
-    // ---- helpers -------------------------------------------------------------
+    const set = (txt) => { const el = $("status"); if (el) el.textContent = txt; };
 
     function justLoggedOut() {
-        const p = new URLSearchParams(location.search);
-        if (p.get("loggedout") === "1") return true;
+        const q = new URLSearchParams(location.search);
+        if (q.get("loggedout") === "1") return true;
         if (sessionStorage.getItem("pry_logged_out") === "1") {
             sessionStorage.removeItem("pry_logged_out");
             return true;
@@ -45,7 +46,7 @@
     }
 
     async function establishChainlitSession(accessToken) {
-        // Create Chainlit session via header-auth, then verify with /chat/user.
+        // Create Chainlit session via header-auth, then verify.
         let r = await fetch("/chat/auth/header", {
             method: "POST",
             credentials: "include",
@@ -63,7 +64,6 @@
     }
 
     function goToChat() {
-        // Prevent /chat/login -> /auth -> /chat loop on first load
         sessionStorage.setItem("pry_auth_just_logged", "1");
         set("Authenticated. Opening chat…");
         window.location.replace("/chat/");
@@ -82,10 +82,9 @@
         goToChat();
     }
 
-    // ---- bootstrap -----------------------------------------------------------
-
+    // ---------- Page bootstrap ----------
     try {
-        // If this is right after a logout, do NOT silently acquire a token.
+        // If we just logged out, stop here (don’t auto-login).
         if (justLoggedOut()) {
             set("Signed out. Click Sign in to continue.");
             return;
@@ -95,7 +94,11 @@
         const acct = result?.account || app.getActiveAccount() || app.getAllAccounts()[0];
         if (result?.account && !app.getActiveAccount()) app.setActiveAccount(result.account);
 
-        if (acct) {
+        // Only resume silently if we explicitly allow it or we just returned from login.
+        const resume = sessionStorage.getItem("pry_auth_just_logged") === "1";
+        sessionStorage.removeItem("pry_auth_just_logged");
+
+        if ((AUTO_SIGNIN_ON_LOAD || resume) && acct) {
             try {
                 await acquireAndBridge(acct);
                 return;
@@ -135,10 +138,11 @@
 
             // Mark this navigation so we skip silent login on /auth
             sessionStorage.setItem("pry_logged_out", "1");
-            set("Signing out…");
 
-            // End MSAL/CIAM session and land on /auth?loggedout=1 (must be a registered redirect URI)
+            set("Signing out…");
             const account = app.getActiveAccount() || app.getAllAccounts()[0] || undefined;
+
+            // Provide account so MSAL adds logout_hint; land on /auth?loggedout=1
             await app.logoutRedirect({
                 authority,
                 account,
