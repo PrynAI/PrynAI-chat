@@ -2,7 +2,7 @@
 (async () => {
     const C = window.PRYNAI_AUTH;
 
-    // Your tenant-level CIAM authority (no policy segment).
+    // Tenant-level CIAM authority (works with your discovery URL)
     const authority = `https://${C.tenantSubdomain}.ciamlogin.com/${C.tenantId}/`;
 
     const msalConfig = {
@@ -31,42 +31,55 @@
         return resp.ok;
     }
 
+    async function establishChainlitSession(accessToken) {
+        // 1) Preferred in Chainlit 2.x: header-auth endpoint
+        let r = await fetch("/chat/auth/header", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Authorization": `Bearer ${accessToken}` }
+        });
+
+        // 2) Fallback for older builds that don’t expose /chat/auth/header:
+        if (r.status === 404) {
+            r = await fetch("/chat/user", {
+                method: "GET",
+                credentials: "include",
+                headers: { "Authorization": `Bearer ${accessToken}` }
+            });
+        }
+        return r.ok;
+    }
+
     function goToChat() {
+        // Prevent the /chat/login -> /auth -> /chat loop on first load
+        sessionStorage.setItem("pry_auth_just_logged", "1");
         set("Authenticated. Opening chat…");
         window.location.replace("/chat/");
     }
 
-    async function refreshSilentlyAndGo() {
-        const acct = app.getActiveAccount() || app.getAllAccounts()[0];
-        if (!acct) return set("Sign in first.");
-        try {
-            const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
-            if (await saveAccessToken(res.accessToken)) {
-                goToChat();
-            } else {
-                set("Saving token failed.");
-            }
-        } catch (e) {
-            console.warn("Silent failed; falling back to redirect", e);
-            await app.acquireTokenRedirect({ scopes: [C.apiScope], authority });
+    async function acquireAndBridge(acct) {
+        const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
+        if (!(await saveAccessToken(res.accessToken))) {
+            set("Token acquired but saving failed.");
+            return;
         }
+        if (!(await establishChainlitSession(res.accessToken))) {
+            set("Saved token but header auth failed (401). Check server logs.");
+            return;
+        }
+        goToChat();
     }
 
     try {
-        // Complete any redirect, then try silent token (fresh or cached).
         const result = await app.handleRedirectPromise();
         const acct = result?.account || app.getActiveAccount() || app.getAllAccounts()[0];
         if (result?.account && !app.getActiveAccount()) app.setActiveAccount(result.account);
         if (acct) {
             try {
-                const res = await app.acquireTokenSilent({ scopes: [C.apiScope], account: acct, authority });
-                if (await saveAccessToken(res.accessToken)) {
-                    goToChat();
-                    return;
-                }
-                set("Token acquired but saving failed.");
+                await acquireAndBridge(acct);
+                return;
             } catch (e) {
-                console.warn("Silent token failed; user action required", e);
+                console.warn("Silent flow failed; user action required", e);
             }
         }
     } catch (e) {
@@ -84,7 +97,15 @@
         }
     };
 
-    $("tokenBtn").onclick = refreshSilentlyAndGo;
+    $("tokenBtn").onclick = async () => {
+        const acct = app.getActiveAccount() || app.getAllAccounts()[0];
+        if (!acct) return set("Sign in first.");
+        try { await acquireAndBridge(acct); }
+        catch (e) {
+            console.warn("Silent failed; falling back to redirect", e);
+            await app.acquireTokenRedirect({ scopes: [C.apiScope], authority });
+        }
+    };
 
     $("logoutBtn").onclick = async () => {
         try {
