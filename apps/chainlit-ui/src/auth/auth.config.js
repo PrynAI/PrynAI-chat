@@ -5,6 +5,6 @@ window.PRYNAI_AUTH = {
     policy: "SignUpSignIn",
     spaClientId: "ae480273-33ea-44be-8875-fcc7b4bcf9b6",
     apiScope: "api://76206f73-e73f-4722-b8b4-f97469fefcdf/chat.fullaccess",
-    redirectUri: "/auth/",             // served by the same app
-    postLogoutRedirectUri: "/auth/"
+    redirectUri: window.location.origin + "/auth/",             // served by the same app
+    postLogoutRedirectUri: window.location.origin + "/auth/"
 };
