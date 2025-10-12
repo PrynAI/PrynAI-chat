@@ -62,7 +62,6 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
     """Resume newest thread or create one if none exists."""
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
-        # Resume newest
         try:
             r = await client.get(f"{GATEWAY_BASE}/api/threads?limit=1", headers=headers)
             if r.status_code == 200:
@@ -77,7 +76,6 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
                     )
         except Exception:
             pass
-        # Create
         try:
             r = await client.post(f"{GATEWAY_BASE}/api/threads", json={}, headers=headers)
             if r.status_code == 200:

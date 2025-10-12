@@ -1,7 +1,6 @@
-/* Hide Chainlit’s built-in "New chat" header button (various builds/selectors) */
+/* apps/chainlit-ui/src/public/hide-default-new-chat.css */
+/* Hide Chainlit’s built-in "New Chat" controls (header or body) using stable selectors */
 [data-testid="new-chat-button"],
-button[aria-label="New Chat"],
-header button:has(svg),
-header button:has(span:contains("New Chat")) {
+button[aria-label="New Chat"] {
     display: none !important;
 }

@@ -98,7 +98,6 @@ def _bearer_from_request(request: Request) -> Optional[str]:
     token = _parse_cookies(request.headers.get("cookie")).get(APP_COOKIE)
     if token:
         return f"Bearer {token}"
-    # First probe may include Authorization
     authz = request.headers.get("authorization")
     if authz and authz.lower().startswith("bearer "):
         return authz
@@ -156,32 +155,24 @@ async def ui_transcript(thread_id: str, request: Request, limit: int = 200):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     headers = {"authorization": authz}
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{GATEWAY}/api/threads/{thread_id}/messages?limit={int(limit)}",
-                             headers=headers)
+        r = await client.get(
+            f"{GATEWAY}/api/threads/{thread_id}/messages?limit={int(limit)}",
+            headers=headers,
+        )
     try:
         data = r.json()
     except Exception:
         data = {"messages": []}
     return JSONResponse(data, status_code=r.status_code)
 
-# ---------- Deep link routes ----------
+# ---------- Deep link route (kept for bookmarks) ----------
 @app.get("/open/t/{thread_id}")
 async def open_thread(thread_id: str):
-    """
-    Set the active thread cookie and land on /chat/?t=<thread_id>
-    so the URL stays bookmarkable AND Chainlit sees the cookie on first load.
-    """
     domain = os.getenv("COOKIE_DOMAIN") or None
     resp = RedirectResponse(url=f"/chat/?t={thread_id}", status_code=302)
     resp.set_cookie(
-        key=TID_COOKIE,
-        value=thread_id,
-        httponly=False,
-        secure=True,
-        samesite="lax",
-        max_age=60*60*24*7,
-        path="/",
-        domain=domain
+        key=TID_COOKIE, value=thread_id, httponly=False, secure=True,
+        samesite="lax", max_age=60*60*24*7, path="/", domain=domain
     )
     return resp
 
@@ -192,7 +183,6 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     tokens = _parse_cookies(cookie if cookie else "")
     token = tokens.get(APP_COOKIE)
 
-    # Defensive: accept Bearer for the very first probe as well.
     if not token:
         authz = headers.get("authorization") or headers.get("Authorization")
         if authz and authz.lower().startswith("bearer "):
@@ -211,14 +201,14 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     )
     meta = {
         "src": "cookie_or_header",
-        "access_token": token,   # Chainlit stores this on cl.user_session["user"].metadata
+        "access_token": token,
         "sub": claims.get("sub"),
         "name": claims.get("name"),
         "email": claims.get("email"),
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
-        # <- this is the key for selecting a past chat on first load
+        # <- critical: make the selected thread available to Chainlit start()
         "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)
