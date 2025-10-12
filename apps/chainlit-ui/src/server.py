@@ -134,6 +134,7 @@ async def ui_rename_thread(thread_id: str, request: Request):
 
 @app.post("/ui/select_thread")
 async def ui_select_thread(body: Dict[str, str], response: Response):
+    # Back-compat; sidebar now uses /open/t/<id>, but keep this for older links.
     tid = (body or {}).get("thread_id")
     if not tid:
         return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
@@ -147,25 +148,7 @@ async def ui_active_thread(request: Request):
     tid = _parse_cookies(request.headers.get("cookie")).get(TID_COOKIE)
     return {"thread_id": tid}
 
-# Transcript proxy → Gateway
-@app.get("/ui/transcript/{thread_id}")
-async def ui_transcript(thread_id: str, request: Request, limit: int = 200):
-    authz = _bearer_from_request(request)
-    if not authz:
-        return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    headers = {"authorization": authz}
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(
-            f"{GATEWAY}/api/threads/{thread_id}/messages?limit={int(limit)}",
-            headers=headers,
-        )
-    try:
-        data = r.json()
-    except Exception:
-        data = {"messages": []}
-    return JSONResponse(data, status_code=r.status_code)
-
-# ---------- Deep link route (kept for bookmarks) ----------
+# ---------- Deep link route (sets cookie first; then redirect) ----------
 @app.get("/open/t/{thread_id}")
 async def open_thread(thread_id: str):
     domain = os.getenv("COOKIE_DOMAIN") or None

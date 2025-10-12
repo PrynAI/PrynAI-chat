@@ -1,9 +1,9 @@
 // apps/chainlit-ui/src/public/login-redirect.js
 // Sidebar + auth helpers for PrynAI Chat UI.
-// - Works on /chat, /chat/, and /chat/?t=<thread_id>
-// - Creates "New Chat / Search / Chats" sidebar
-// - On click: POST /ui/select_thread to set cookie, then navigate to /chat/?t=<id>
-// - Hides Chainlit's built-in "New Chat" button(s) in header/body
+// - Works on /chat, /chat/, and bookmarks /chat/?t=<thread_id>
+// - Sidebar: New Chat / Search / Chats (list)
+// - On click: navigate to /open/t/<id> so the server sets cookie BEFORE Chainlit loads
+// - Also hides Chainlit's built-in "New Chat" buttons (body/header)
 
 (function redirectChatLoginToAuth() {
     try {
@@ -11,7 +11,7 @@
         if (p === "/chat/login") {
             if (sessionStorage.getItem("pry_auth_just_logged") === "1") {
                 sessionStorage.removeItem("pry_auth_just_logged");
-                return; // allow Chainlit to finish loading once after login
+                return; // allow Chainlit to finish once after login
             }
             window.location.replace("/auth/");
         }
@@ -21,17 +21,16 @@
 /* ---------- Hide built-in "New Chat" controls (Bug #2) ---------- */
 (function hideBuiltInNewChat() {
     function scrub() {
-        // Hide anything that looks like a "New Chat" button via stable attributes
-        document.querySelectorAll('[data-testid="new-chat-button"], button[aria-label="New Chat"]').forEach((b) => {
-            b.style.display = "none";
-        });
+        document
+            .querySelectorAll('[data-testid="new-chat-button"], button[aria-label="New Chat"]')
+            .forEach((b) => (b.style.display = "none"));
     }
     const mo = new MutationObserver(scrub);
     mo.observe(document.documentElement, { childList: true, subtree: true });
     scrub();
 })();
 
-/* ---------- History Sidebar (New Chat / Search / Chats) ---------- */
+/* ---------- History Sidebar ---------- */
 (function initSidebar() {
     if (!window.location.pathname.startsWith("/chat")) return;
     if (document.getElementById("pry-sidebar")) return;
@@ -108,20 +107,12 @@
           </div>
           <span class="rename" title="Rename">✎</span>`;
 
-                // Navigate deterministically: set cookie, then go to /chat/?t=<id>
-                li.querySelector(".row").addEventListener("click", async (ev) => {
+                // Navigate deterministically: /open/t/<id> sets cookie then redirects to /chat/?t=<id>
+                li.querySelector(".row").addEventListener("click", (ev) => {
                     ev.preventDefault();
-                    try {
-                        await api("/ui/select_thread", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ thread_id: t.thread_id }),
-                        });
-                    } catch (_) { }
-                    window.location.assign(`/chat/?t=${t.thread_id}`);
+                    window.location.assign(`/open/t/${t.thread_id}`);
                 });
 
-                // Rename (no navigation)
                 li.querySelector(".rename").addEventListener("click", async (ev) => {
                     ev.preventDefault();
                     ev.stopPropagation();
@@ -141,16 +132,10 @@
             });
     }
 
-    // Create → select → navigate
     newLink.addEventListener("click", async (e) => {
         e.preventDefault();
         const created = await api("/ui/threads", { method: "POST" });
-        await api("/ui/select_thread", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ thread_id: created.thread_id }),
-        });
-        window.location.assign(`/chat/?t=${created.thread_id}`);
+        window.location.assign(`/open/t/${created.thread_id}`);
     });
 
     searchEl.addEventListener("input", async (e) => {
@@ -160,24 +145,15 @@
         } catch (_) { }
     });
 
-    // If user hand-typed /chat/?t=<thread_id>, apply cookie and reload once
-    (async function ensureDeepLinkApplied() {
+    // Deep link: if user bookmarked /chat/?t=<id>, transform to /open/t/<id> once
+    (function coerceBookmark() {
         const url = new URL(window.location.href);
         const tid = url.searchParams.get("t");
         if (!tid) return;
         const key = "pry_tid_applied";
         if (sessionStorage.getItem(key) === tid) return;
-        try {
-            await api("/ui/select_thread", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ thread_id: tid }),
-            });
-            sessionStorage.setItem(key, tid);
-            window.location.replace(`/chat/?t=${tid}`);
-        } catch (e) {
-            console.warn("Failed to apply deep-link thread id", e);
-        }
+        sessionStorage.setItem(key, tid);
+        window.location.replace(`/open/t/${tid}`);
     })();
 
     refresh();
