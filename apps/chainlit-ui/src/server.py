@@ -9,7 +9,7 @@ import httpx
 import chainlit as cl
 from chainlit.utils import mount_chainlit
 from fastapi import FastAPI, Response, Request
-from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from http.cookies import SimpleCookie
 
@@ -135,7 +135,6 @@ async def ui_rename_thread(thread_id: str, request: Request):
 
 @app.post("/ui/select_thread")
 async def ui_select_thread(body: Dict[str, str], response: Response):
-    # Back-compat helper (also used by the deep-link JS)
     tid = (body or {}).get("thread_id")
     if not tid:
         return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
@@ -149,7 +148,7 @@ async def ui_active_thread(request: Request):
     tid = _parse_cookies(request.headers.get("cookie")).get(TID_COOKIE)
     return {"thread_id": tid}
 
-# NEW: transcript proxy (tries both modern and fallback gateway paths)
+# Transcript proxy → Gateway
 @app.get("/ui/transcript/{thread_id}")
 async def ui_transcript(thread_id: str, request: Request, limit: int = 200):
     authz = _bearer_from_request(request)
@@ -157,11 +156,8 @@ async def ui_transcript(thread_id: str, request: Request, limit: int = 200):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     headers = {"authorization": authz}
     async with httpx.AsyncClient(timeout=30) as client:
-        # Preferred path: /api/threads/{id}/transcript
-        r = await client.get(f"{GATEWAY}/api/threads/{thread_id}/transcript?limit={int(limit)}", headers=headers)
-        if r.status_code == 404:
-            # Fallback to /api/transcript/{id}
-            r = await client.get(f"{GATEWAY}/api/transcript/{thread_id}?limit={int(limit)}", headers=headers)
+        r = await client.get(f"{GATEWAY}/api/threads/{thread_id}/messages?limit={int(limit)}",
+                             headers=headers)
     try:
         data = r.json()
     except Exception:
@@ -176,7 +172,7 @@ async def open_thread(thread_id: str):
     so the URL stays bookmarkable AND Chainlit sees the cookie on first load.
     """
     domain = os.getenv("COOKIE_DOMAIN") or None
-    resp = RedirectResponse(url=f"/chat/?t={thread_id}")
+    resp = RedirectResponse(url=f"/chat/?t={thread_id}", status_code=302)
     resp.set_cookie(
         key=TID_COOKIE,
         value=thread_id,
@@ -222,7 +218,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
-        # Active thread id (set via /open/t/* or /ui/select_thread)
+        # <- this is the key for selecting a past chat on first load
         "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)

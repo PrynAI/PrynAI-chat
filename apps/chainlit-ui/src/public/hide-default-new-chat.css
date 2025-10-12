@@ -1,5 +1,7 @@
-/* Best-effort: hide Chainlit’s built-in "New chat" header button */
+/* Hide Chainlit’s built-in "New chat" header button (various builds/selectors) */
 [data-testid="new-chat-button"],
-button[aria-label="New Chat"] {
+button[aria-label="New Chat"],
+header button:has(svg),
+header button:has(span:contains("New Chat")) {
     display: none !important;
 }

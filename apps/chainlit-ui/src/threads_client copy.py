@@ -25,6 +25,8 @@ def _auth_headers() -> Dict[str, str]:
         h["authorization"] = f"Bearer {token}"
     return h
 
+# ---------- Threads CRUD ----------
+
 async def list_threads(limit: int = 50) -> List[ThreadSummary]:
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
@@ -32,12 +34,15 @@ async def list_threads(limit: int = 50) -> List[ThreadSummary]:
         if r.status_code != 200:
             return []
         items = r.json() or []
-        return [ThreadSummary(
-            thread_id=i.get("thread_id"),
-            title=i.get("title"),
-            created_at=i.get("created_at"),
-            updated_at=i.get("updated_at"),
-        ) for i in items]
+        return [
+            ThreadSummary(
+                thread_id=i.get("thread_id"),
+                title=i.get("title"),
+                created_at=i.get("created_at"),
+                updated_at=i.get("updated_at"),
+            )
+            for i in items
+        ]
 
 async def get_thread(thread_id: str) -> Optional[ThreadSummary]:
     headers = _auth_headers()
@@ -46,8 +51,12 @@ async def get_thread(thread_id: str) -> Optional[ThreadSummary]:
         if r.status_code != 200:
             return None
         t = r.json()
-        return ThreadSummary(thread_id=t.get("thread_id"), title=t.get("title"),
-                             created_at=t.get("created_at"), updated_at=t.get("updated_at"))
+        return ThreadSummary(
+            thread_id=t.get("thread_id"),
+            title=t.get("title"),
+            created_at=t.get("created_at"),
+            updated_at=t.get("updated_at"),
+        )
 
 async def ensure_active_thread() -> Optional[ThreadSummary]:
     """Resume newest thread or create one if none exists."""
@@ -60,8 +69,12 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
                 items = r.json() or []
                 if items:
                     t = items[0]
-                    return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"),
-                                         created_at=t.get("created_at"), updated_at=t.get("updated_at"))
+                    return ThreadSummary(
+                        thread_id=t["thread_id"],
+                        title=t.get("title"),
+                        created_at=t.get("created_at"),
+                        updated_at=t.get("updated_at"),
+                    )
         except Exception:
             pass
         # Create
@@ -69,8 +82,12 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
             r = await client.post(f"{GATEWAY_BASE}/api/threads", json={}, headers=headers)
             if r.status_code == 200:
                 t = r.json()
-                return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"),
-                                     created_at=t.get("created_at"), updated_at=t.get("updated_at"))
+                return ThreadSummary(
+                    thread_id=t["thread_id"],
+                    title=t.get("title"),
+                    created_at=t.get("created_at"),
+                    updated_at=t.get("updated_at"),
+                )
         except Exception:
             pass
     return None
@@ -82,9 +99,15 @@ async def create_new_thread(title: Optional[str] = None) -> Optional[ThreadSumma
         r = await client.post(f"{GATEWAY_BASE}/api/threads", json=payload, headers=headers)
         if r.status_code == 200:
             t = r.json()
-            return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"),
-                                 created_at=t.get("created_at"), updated_at=t.get("updated_at"))
+            return ThreadSummary(
+                thread_id=t["thread_id"],
+                title=t.get("title"),
+                created_at=t.get("created_at"),
+                updated_at=t.get("updated_at"),
+            )
     return None
+
+# ---------- Auto-title (first user prompt) ----------
 
 def _suggest_title_from_text(text: str) -> str:
     # Deterministic, safe: first ~7 words, title‑cased, trimmed to 60 chars.
@@ -96,7 +119,6 @@ def _suggest_title_from_text(text: str) -> str:
 
 async def ensure_title(thread_id: str, user_prompt: str) -> Optional[str]:
     """If thread has no title, set one derived from the user's first prompt."""
-    # Read thread to check ownership/title
     t = await get_thread(thread_id)
     if not t:
         return None
@@ -106,8 +128,71 @@ async def ensure_title(thread_id: str, user_prompt: str) -> Optional[str]:
     new_title = _suggest_title_from_text(user_prompt)
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.put(f"{GATEWAY_BASE}/api/threads/{thread_id}",
-                             json={"title": new_title}, headers=headers)
+        r = await client.put(
+            f"{GATEWAY_BASE}/api/threads/{thread_id}",
+            json={"title": new_title},
+            headers=headers,
+        )
         if r.status_code == 200:
             return new_title
     return None
+
+# NEW: fetch persisted transcript for a thread
+async def list_messages(thread_id: str) -> list[dict]:
+    headers = _auth_headers()
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(f"{GATEWAY_BASE}/api/threads/{thread_id}/messages", headers=headers)
+        if r.status_code != 200:
+            return []
+        return r.json() or []
+
+# ---------- Transcript fetch + normalize ----------
+
+def _normalize_messages(payload) -> List[Dict[str, str]]:
+    """
+    Accepts either:
+    - {"messages":[{role,content}, ...]}
+    - or a raw list [{role,content}, ...]
+    Returns a list of {role, content} with only "user" / "assistant" roles.
+    """
+    items = payload.get("messages") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, list):
+            # join structured blocks
+            parts: List[str] = []
+            for b in content:
+                if isinstance(b, dict):
+                    t = b.get("text") or b.get("input_text") or b.get("output_text")
+                    if t:
+                        parts.append(t)
+                elif isinstance(b, str):
+                    parts.append(b)
+            content = "".join(parts)
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content})
+    return out
+
+async def fetch_transcript(thread_id: str, limit: int = 200) -> List[Dict[str, str]]:
+    """
+    Fetch transcript via the Chainlit UI proxy (/ui/transcript/<id>) which
+    forwards to the Gateway. The proxy makes sure the browser cookie is used.
+    """
+    url = f"/ui/transcript/{thread_id}?limit={int(limit)}"
+    async with httpx.AsyncClient(timeout=20) as client:
+        # NOTE: We rely on browser cookies; httpx here runs server-side, so we can't
+        # forward them automatically. The UI proxy route is what the browser hits.
+        # Inside Chainlit (server), we call the proxy on localhost using absolute path.
+        try:
+            r = await client.get(url)
+            if r.status_code == 200:
+                return _normalize_messages(r.json() or [])
+        except Exception:
+            pass
+    return []

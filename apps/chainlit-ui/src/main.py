@@ -9,47 +9,24 @@ from threads_client import (
 )
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
-# Internal loopback for calling our own FastAPI helpers (used to read the active cookie deterministically)
-UI_INTERNAL_BASE = os.environ.get("UI_INTERNAL_BASE", "http://127.0.0.1:8000")
 
 def _active_thread_id() -> str | None:
     return cl.user_session.get("thread_id")
 
 def _set_active_thread_id(tid: str | None) -> None:
-    if tid:
-        cl.user_session.set("thread_id", tid)
-    else:
-        cl.user_session.set("thread_id", None)
-
-async def _cookie_active_thread_id() -> str | None:
-    """
-    Ask the UI server which thread_id is in the cookie. This avoids any race
-    between the sidebar click → /open/t/* and Chat start.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"{UI_INTERNAL_BASE}/ui/active_thread")
-            if r.status_code == 200:
-                return (r.json() or {}).get("thread_id")
-    except Exception:
-        pass
-    return None
+    cl.user_session.set("thread_id", tid if tid else None)
 
 async def _render_transcript(thread_id: str):
-    """
-    Replay persisted transcript so the page isn't empty after refresh.
-    """
     msgs = await list_messages(thread_id)
     if not msgs:
         return
     for m in msgs:
         role = (m.get("role") or "").lower()
         content = m.get("content") or ""
-        # Render in the UI (no tool calls here; just display)
         if role == "user":
             await cl.Message(author="You", content=content).send()
         else:
-            await cl.Message(author="Assistant", content=content).send()
+            await cl.Message(content=content).send()
 
 @cl.on_chat_start
 async def start():
@@ -60,26 +37,20 @@ async def start():
         await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
         return
 
-    # 1) Strong source of truth: cookie set by /open/t/<thread_id>
-    tid_from_cookie = await _cookie_active_thread_id()
-
-    # 2) Secondary: value surfaced by header_auth_callback
+    # Prefer the thread id set by the UI deep-link cookie (exposed by header_auth_callback)
     meta_tid = None
     if getattr(app_user, "metadata", None):
         meta_tid = app_user.metadata.get("active_thread_id")
 
-    target_tid = tid_from_cookie or meta_tid
-
-    if target_tid:
-        t = await get_thread(target_tid)
+    if meta_tid:
+        t = await get_thread(meta_tid)
         if t:
-            _set_active_thread_id(target_tid)
-            await cl.Message(content=f"Resuming thread `{target_tid[:8]}`.").send()
-            await _render_transcript(target_tid)
-            return  # We're done; don't override with 'newest'
-        # If unknown/forbidden, fall through to resume-newest
+            _set_active_thread_id(meta_tid)
+            await cl.Message(content=f"Resuming thread `{meta_tid[:8]}`.").send()
+            await _render_transcript(meta_tid)
+            return
+        # if not found/forbidden, fall back to newest-or-create
 
-    # Fallback: newest or create
     ts = await ensure_active_thread()
     if ts and ts.thread_id:
         _set_active_thread_id(ts.thread_id)
@@ -90,13 +61,11 @@ async def start():
 
 @cl.on_message
 async def handle_message(message: cl.Message):
-    # Defensive: ensure an active thread exists
     if not _active_thread_id():
         ts = await ensure_active_thread()
         if ts and ts.thread_id:
             _set_active_thread_id(ts.thread_id)
 
-    # Auto-title on first user turn if untitled
     if _active_thread_id():
         _ = await ensure_title(_active_thread_id(), message.content)
 

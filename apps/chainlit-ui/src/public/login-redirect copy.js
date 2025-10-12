@@ -12,42 +12,19 @@
     } catch (_) { }
 })();
 
-/* ---------- Kill the built-in "New Chat" header button (Bug #2) ---------- */
-(function killNewChatHeader() {
-    function removeIt() {
-        const candidates = [
-            '[data-testid="new-chat-button"]',
-            'button[aria-label="New Chat"]',
-            'header button:has(svg)',
-            'header button:has(span:contains("New Chat"))'
-        ];
-        for (const sel of candidates) {
-            document.querySelectorAll(sel).forEach((el) => {
-                if (el && /new chat/i.test(el.textContent || "") || el.getAttribute("aria-label") === "New Chat") {
-                    el.style.display = "none";
-                    el.removeAttribute("data-testid");
-                    el.removeAttribute("aria-label");
-                }
-            });
-        }
-    }
-    const mo = new MutationObserver(removeIt);
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-    removeIt();
-})();
-
 /* ---------- History Sidebar (New Chat / Search / Chats) ---------- */
 (function () {
+    // Only render on the chat page
     if (!/\/chat\/?$/.test(window.location.pathname)) return;
 
     const css = `
   #pry-sidebar{position:fixed;left:0;top:0;height:100%;width:290px;background:#101014;color:#e6e6e6;z-index:9999;border-right:1px solid #2a2a2e;}
   #pry-sidebar header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px;border-bottom:1px solid #2a2a2e;font-weight:600}
   #pry-sidebar .pry-body{padding:12px;display:flex;flex-direction:column;gap:10px}
-  #pry-sidebar a.pry-new{display:block;text-decoration:none;text-align:center;padding:8px 10px;border:1px dashed #7b5cff;background:transparent;color:#bfa8ff;border-radius:8px;cursor:pointer;font-weight:600}
+  #pry-sidebar button.pry-new{width:100%;padding:8px 10px;border:1px dashed #7b5cff;background:transparent;color:#bfa8ff;border-radius:8px;cursor:pointer;font-weight:600}
   #pry-sidebar input.pry-search{width:100%;padding:8px;border:1px solid #2a2a2e;background:#141418;color:#ddd;border-radius:8px;outline:none}
   #pry-sidebar ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;overflow:auto;max-height:calc(100vh - 170px)}
-  #pry-sidebar li{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px;border-radius:8px}
+  #pry-sidebar li{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px;border-radius:8px;cursor:pointer}
   #pry-sidebar li:hover{background:#17171c}
   #pry-sidebar .title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
   #pry-sidebar .meta{opacity:.6;font-size:.85em}
@@ -69,29 +46,21 @@
       <span class="meta">PrynAI</span>
     </header>
     <div class="pry-body">
-      <a href="/open/t/new" class="pry-new" data-new>➕ New Chat</a>
+      <button class="pry-new">➕ New Chat</button>
       <input class="pry-search" placeholder="Search chats"/>
       <ul class="pry-list" aria-label="Chat history"></ul>
-    </div>`;
+    </div>
+  `;
     document.body.appendChild(side);
 
     const listEl = side.querySelector(".pry-list");
     const searchEl = side.querySelector(".pry-search");
-    const newLink = side.querySelector("a.pry-new");
+    const newBtn = side.querySelector(".pry-new");
 
     async function api(path, opts) {
         const r = await fetch(path, { credentials: "include", ...opts });
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
-    }
-
-    async function refresh() {
-        try {
-            const items = await api("/ui/threads");
-            render(items);
-        } catch (e) {
-            console.warn("History load failed", e);
-        }
     }
 
     function render(items, q = "") {
@@ -102,18 +71,24 @@
             .forEach((t) => {
                 const li = document.createElement("li");
                 li.innerHTML = `
-          <a class="row" href="/open/t/${t.thread_id}" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:inherit">
+          <div class="row">
             <span class="icon">💬</span>
             <div class="col">
               <div class="title" title="${t.title || t.thread_id}">${t.title || t.thread_id}</div>
               <div class="meta">${(t.updated_at || t.created_at || "").slice(0, 16).replace("T", " ")}</div>
             </div>
-          </a>
-          <span class="rename" title="Rename">✎</span>`;
+          </div>
+          <span class="rename" title="Rename">✎</span>
+        `;
 
-                // Rename (doesn't navigate)
+                // Select thread via deep link (sets cookie server-side and keeps URL)
+                li.addEventListener("click", (ev) => {
+                    if (ev.target.classList.contains("rename")) return;
+                    window.location.href = `/open/t/${t.thread_id}`;
+                });
+
+                // Rename
                 li.querySelector(".rename").addEventListener("click", async (ev) => {
-                    ev.preventDefault();
                     ev.stopPropagation();
                     const cur = t.title || "";
                     const next = window.prompt("Rename chat:", cur);
@@ -131,11 +106,19 @@
             });
     }
 
-    // Create then navigate through /open/t/<id> (server sets cookie; URL becomes /chat/?t=...)
-    newLink.addEventListener("click", async (e) => {
-        e.preventDefault();
+    async function refresh() {
+        try {
+            const items = await api("/ui/threads");
+            render(items);
+        } catch (e) {
+            console.warn("History load failed", e);
+        }
+    }
+
+    newBtn.addEventListener("click", async () => {
         const created = await api("/ui/threads", { method: "POST" });
-        window.location.assign(`/open/t/${created.thread_id}`);
+        // Navigate through server deep link so cookie is set before Chainlit loads
+        window.location.href = `/open/t/${created.thread_id}`;
     });
 
     searchEl.addEventListener("input", async (e) => {
@@ -159,7 +142,7 @@
                 body: JSON.stringify({ thread_id: tid }),
             });
             sessionStorage.setItem(key, tid);
-            // reload so header_auth_callback sees cookie on first Chainlit probe
+            // reload to ensure header_auth_callback sees cookie on first Chainlit probe
             window.location.replace(`/chat/?t=${tid}`);
         } catch (e) {
             console.warn("Failed to apply deep-link thread id", e);

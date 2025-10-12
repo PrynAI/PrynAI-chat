@@ -110,7 +110,6 @@ async def create_new_thread(title: Optional[str] = None) -> Optional[ThreadSumma
 # ---------- Auto-title (first user prompt) ----------
 
 def _suggest_title_from_text(text: str) -> str:
-    # Deterministic, safe: first ~7 words, title‑cased, trimmed to 60 chars.
     import re
     words = re.sub(r"\s+", " ", re.sub(r"[^\w\s\-’'?!.,]", "", text)).strip().split(" ")
     base = " ".join(words[:7]).strip()
@@ -137,7 +136,8 @@ async def ensure_title(thread_id: str, user_prompt: str) -> Optional[str]:
             return new_title
     return None
 
-# NEW: fetch persisted transcript for a thread
+# ---------- Transcript ----------
+
 async def list_messages(thread_id: str) -> list[dict]:
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
@@ -145,54 +145,3 @@ async def list_messages(thread_id: str) -> list[dict]:
         if r.status_code != 200:
             return []
         return r.json() or []
-
-# ---------- Transcript fetch + normalize ----------
-
-def _normalize_messages(payload) -> List[Dict[str, str]]:
-    """
-    Accepts either:
-    - {"messages":[{role,content}, ...]}
-    - or a raw list [{role,content}, ...]
-    Returns a list of {role, content} with only "user" / "assistant" roles.
-    """
-    items = payload.get("messages") if isinstance(payload, dict) else payload
-    if not isinstance(items, list):
-        return []
-    out: List[Dict[str, str]] = []
-    for m in items:
-        if not isinstance(m, dict):
-            continue
-        role = m.get("role")
-        content = m.get("content")
-        if isinstance(content, list):
-            # join structured blocks
-            parts: List[str] = []
-            for b in content:
-                if isinstance(b, dict):
-                    t = b.get("text") or b.get("input_text") or b.get("output_text")
-                    if t:
-                        parts.append(t)
-                elif isinstance(b, str):
-                    parts.append(b)
-            content = "".join(parts)
-        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            out.append({"role": role, "content": content})
-    return out
-
-async def fetch_transcript(thread_id: str, limit: int = 200) -> List[Dict[str, str]]:
-    """
-    Fetch transcript via the Chainlit UI proxy (/ui/transcript/<id>) which
-    forwards to the Gateway. The proxy makes sure the browser cookie is used.
-    """
-    url = f"/ui/transcript/{thread_id}?limit={int(limit)}"
-    async with httpx.AsyncClient(timeout=20) as client:
-        # NOTE: We rely on browser cookies; httpx here runs server-side, so we can't
-        # forward them automatically. The UI proxy route is what the browser hits.
-        # Inside Chainlit (server), we call the proxy on localhost using absolute path.
-        try:
-            r = await client.get(url)
-            if r.status_code == 200:
-                return _normalize_messages(r.json() or [])
-        except Exception:
-            pass
-    return []
