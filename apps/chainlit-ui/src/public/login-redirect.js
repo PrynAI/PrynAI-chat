@@ -32,17 +32,12 @@
   #pry-sidebar .icon{opacity:.7}
   #pry-sidebar .rename{opacity:.6;cursor:pointer}
   #pry-sidebar .rename:hover{opacity:1}
-  /* shift Chainlit canvas to the right so sidebar doesn't overlay */
-  body:has(#pry-sidebar) #root, body:has(#pry-sidebar) .cl-root {
-    margin-left: 290px;
-  }`;
+  body:has(#pry-sidebar) #root, body:has(#pry-sidebar) .cl-root { margin-left: 290px; }`;
 
-    // Inject style
     const style = document.createElement("style");
     style.textContent = css;
     document.head.appendChild(style);
 
-    // Sidebar shell
     const side = document.createElement("aside");
     side.id = "pry-sidebar";
     side.innerHTML = `
@@ -85,17 +80,13 @@
           </div>
           <span class="rename" title="Rename">✎</span>
         `;
-                // Select thread
-                li.addEventListener("click", async (ev) => {
+
+                // Select thread via deep link (sets cookie server-side and keeps URL)
+                li.addEventListener("click", (ev) => {
                     if (ev.target.classList.contains("rename")) return;
-                    await api("/ui/select_thread", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ thread_id: t.thread_id }),
-                    });
-                    // Navigate so Chainlit re-binds session on selected thread
-                    window.location.replace("/chat/");
+                    window.location.href = `/open/t/${t.thread_id}`;
                 });
+
                 // Rename
                 li.querySelector(".rename").addEventListener("click", async (ev) => {
                     ev.stopPropagation();
@@ -110,6 +101,7 @@
                         await refresh();
                     }
                 });
+
                 listEl.appendChild(li);
             });
     }
@@ -125,12 +117,8 @@
 
     newBtn.addEventListener("click", async () => {
         const created = await api("/ui/threads", { method: "POST" });
-        await api("/ui/select_thread", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ thread_id: created.thread_id }),
-        });
-        window.location.replace("/chat/");
+        // Navigate through server deep link so cookie is set before Chainlit loads
+        window.location.href = `/open/t/${created.thread_id}`;
     });
 
     searchEl.addEventListener("input", async (e) => {
@@ -139,6 +127,27 @@
             render(items, e.target.value || "");
         } catch (_) { }
     });
+
+    // Support manual deep-link: /chat/?t=<thread_id>
+    (async function ensureDeepLinkApplied() {
+        const url = new URL(window.location.href);
+        const tid = url.searchParams.get("t");
+        if (!tid) return;
+        const key = "pry_tid_applied";
+        if (sessionStorage.getItem(key) === tid) return;
+        try {
+            await api("/ui/select_thread", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ thread_id: tid }),
+            });
+            sessionStorage.setItem(key, tid);
+            // reload to ensure header_auth_callback sees cookie on first Chainlit probe
+            window.location.replace(`/chat/?t=${tid}`);
+        } catch (e) {
+            console.warn("Failed to apply deep-link thread id", e);
+        }
+    })();
 
     refresh();
 })();

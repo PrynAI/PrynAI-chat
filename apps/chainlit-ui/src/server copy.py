@@ -5,6 +5,7 @@ import os, json, base64
 from typing import Optional, Dict, List
 from importlib.resources import files as pkg_files
 
+import httpx
 import chainlit as cl
 from chainlit.utils import mount_chainlit
 from fastapi import FastAPI, Response, Request
@@ -12,9 +13,11 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from http.cookies import SimpleCookie
 
-APP_COOKIE = "prynai_at"
+APP_COOKIE = "prynai_at"   # HttpOnly Entra access token (from /auth)
+TID_COOKIE = "prynai_tid"  # Active LangGraph thread id (UI-selected)
 TOKEN_API = "/_auth/token"
 LOGOUT_API = "/_auth/logout"
+GATEWAY = os.getenv("GATEWAY_URL", "http://localhost:8080").rstrip("/")
 
 app = FastAPI(title="PrynAI Chat UI (with MSAL)")
 
@@ -53,47 +56,31 @@ async def save_token(body: Dict[str, str], response: Response):
 
     domain = os.getenv("COOKIE_DOMAIN")  # e.g., "chat.prynai.com"
     response.set_cookie(
-        key=APP_COOKIE,
-        value=tok,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=3600,
-        path="/",
-        domain=domain if domain else None,
+        key=APP_COOKIE, value=tok, httponly=True, secure=True, samesite="lax",
+        max_age=3600, path="/", domain=domain if domain else None,
     )
     return {"ok": True}
 
 @app.post(LOGOUT_API)
 async def logout(response: Response):
-    """Clear the HttpOnly access-token cookie for both host-only and domain-scoped cases."""
+    """Clear both the host-only and domain-scoped variants."""
     domain = os.getenv("COOKIE_DOMAIN") or None
-
-    # 1) Delete the host-only cookie (no Domain attribute)
     response.delete_cookie(APP_COOKIE, path="/")
-
-    # 2) If we set a Domain cookie, delete that variant too
+    response.delete_cookie(TID_COOKIE, path="/")
     if domain:
         response.delete_cookie(APP_COOKIE, path="/", domain=domain)
-
-    # 3) Overwrite with an expired cookie (defensive)
-    response.set_cookie(
-        key=APP_COOKIE,
-        value="",
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=0,
-        expires=0,
-        path="/",
-        domain=domain
-    )
+        response.delete_cookie(TID_COOKIE, path="/", domain=domain)
+    # Defensive overwrite
+    response.set_cookie(key=APP_COOKIE, value="", httponly=True, secure=True,
+                        samesite="lax", max_age=0, expires=0, path="/", domain=domain)
+    response.set_cookie(key=TID_COOKIE, value="", httponly=False, secure=True,
+                        samesite="lax", max_age=0, expires=0, path="/", domain=domain)
     return {"ok": True}
 
 # ---------- Helpers ----------
-def _parse_cookies(cookie_header: Optional[str]) -> Dict[str, str]:
+def _parse_cookies(header: Optional[str]) -> Dict[str, str]:
     c = SimpleCookie()
-    c.load(cookie_header or "")
+    c.load(header or "")
     return {k: morsel.value for k, morsel in c.items()}
 
 def _jwt_claims_unverified(token: str) -> Dict[str, str]:
@@ -107,20 +94,73 @@ def _jwt_claims_unverified(token: str) -> Dict[str, str]:
     except Exception:
         return {}
 
+def _bearer_from_request(request: Request) -> Optional[str]:
+    token = _parse_cookies(request.headers.get("cookie")).get(APP_COOKIE)
+    if token:
+        return f"Bearer {token}"
+    # First probe may include Authorization
+    authz = request.headers.get("authorization")
+    if authz and authz.lower().startswith("bearer "):
+        return authz
+    return None
+
+# ---------- UI helper APIs (proxy to Gateway with cookie auth) ----------
+@app.get("/ui/threads")
+async def ui_list_threads(request: Request):
+    authz = _bearer_from_request(request)
+    if not authz:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(f"{GATEWAY}/api/threads?limit=50", headers={"authorization": authz})
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+@app.post("/ui/threads")
+async def ui_create_thread(request: Request):
+    authz = _bearer_from_request(request)
+    if not authz:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(f"{GATEWAY}/api/threads", json={}, headers={"authorization": authz})
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+@app.put("/ui/threads/{thread_id}")
+async def ui_rename_thread(thread_id: str, request: Request):
+    authz = _bearer_from_request(request)
+    if not authz:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    payload = await request.json()
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.put(f"{GATEWAY}/api/threads/{thread_id}", json=payload, headers={"authorization": authz})
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+@app.post("/ui/select_thread")
+async def ui_select_thread(body: Dict[str, str], response: Response):
+    tid = (body or {}).get("thread_id")
+    if not tid:
+        return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
+    domain = os.getenv("COOKIE_DOMAIN") or None
+    # This cookie is NOT HttpOnly; JS writes it to switch thread
+    response.set_cookie(key=TID_COOKIE, value=tid, httponly=False, secure=True,
+                        samesite="lax", max_age=60*60*24*7, path="/", domain=domain)
+    return {"ok": True, "thread_id": tid}
+
+@app.get("/ui/active_thread")
+async def ui_active_thread(request: Request):
+    tid = _parse_cookies(request.headers.get("cookie")).get(TID_COOKIE)
+    return {"thread_id": tid}
+
 # ---------- Chainlit header-auth bridge ----------
 @cl.header_auth_callback
 def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     cookie = headers.get("cookie") or headers.get("Cookie")
-    token = _parse_cookies(cookie).get(APP_COOKIE) if cookie else None
+    tokens = _parse_cookies(cookie if cookie else "")
+    token = tokens.get(APP_COOKIE)
 
     # Defensive: accept Bearer for the very first probe as well.
     if not token:
         authz = headers.get("authorization") or headers.get("Authorization")
         if authz and authz.lower().startswith("bearer "):
             token = authz.split(" ", 1)[1]
-
-    print(f"[auth] header_auth_callback: has_cookie={bool(cookie and APP_COOKIE in (cookie or ''))}; "
-          f"has_authz={'authorization' in {k.lower() for k in (headers or {}).keys()}}", flush=True)
 
     if not token:
         return None
@@ -142,16 +182,19 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
+        # NEW: active thread id (if set by sidebar)
+        "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)
 
 @cl.on_logout
 async def _on_logout(request: Request, response: Response):
-    """Ensure Chainlit’s own logout also clears both cookie variants."""
     domain = os.getenv("COOKIE_DOMAIN") or None
     response.delete_cookie(APP_COOKIE, path="/")
+    response.delete_cookie(TID_COOKIE, path="/")
     if domain:
         response.delete_cookie(APP_COOKIE, path="/", domain=domain)
+        response.delete_cookie(TID_COOKIE, path="/", domain=domain)
 
 # ---------- Mount Chainlit at /chat ----------
 def _find_chainlit_target() -> str:
