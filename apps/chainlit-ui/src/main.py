@@ -5,17 +5,51 @@ import chainlit as cl
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
 from threads_client import (
-    ensure_active_thread, create_new_thread,
-    get_thread, ensure_title
+    ensure_active_thread, get_thread, ensure_title, list_messages
 )
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+# Internal loopback for calling our own FastAPI helpers (used to read the active cookie deterministically)
+UI_INTERNAL_BASE = os.environ.get("UI_INTERNAL_BASE", "http://127.0.0.1:8000")
 
 def _active_thread_id() -> str | None:
     return cl.user_session.get("thread_id")
 
-def _set_active_thread_id(tid: str) -> None:
-    cl.user_session.set("thread_id", tid)
+def _set_active_thread_id(tid: str | None) -> None:
+    if tid:
+        cl.user_session.set("thread_id", tid)
+    else:
+        cl.user_session.set("thread_id", None)
+
+async def _cookie_active_thread_id() -> str | None:
+    """
+    Ask the UI server which thread_id is in the cookie. This avoids any race
+    between the sidebar click → /open/t/* and Chat start.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{UI_INTERNAL_BASE}/ui/active_thread")
+            if r.status_code == 200:
+                return (r.json() or {}).get("thread_id")
+    except Exception:
+        pass
+    return None
+
+async def _render_transcript(thread_id: str):
+    """
+    Replay persisted transcript so the page isn't empty after refresh.
+    """
+    msgs = await list_messages(thread_id)
+    if not msgs:
+        return
+    for m in msgs:
+        role = (m.get("role") or "").lower()
+        content = m.get("content") or ""
+        # Render in the UI (no tool calls here; just display)
+        if role == "user":
+            await cl.Message(author="You", content=content).send()
+        else:
+            await cl.Message(author="Assistant", content=content).send()
 
 @cl.on_chat_start
 async def start():
@@ -26,28 +60,33 @@ async def start():
         await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
         return
 
-    # Respect selection from sidebar (via cookie surfaced in metadata)
-    selected_tid = getattr(app_user, "metadata", {}).get("active_thread_id") if getattr(app_user, "metadata", None) else None
+    # 1) Strong source of truth: cookie set by /open/t/<thread_id>
+    tid_from_cookie = await _cookie_active_thread_id()
 
-    if selected_tid:
-        t = await get_thread(selected_tid)
+    # 2) Secondary: value surfaced by header_auth_callback
+    meta_tid = None
+    if getattr(app_user, "metadata", None):
+        meta_tid = app_user.metadata.get("active_thread_id")
+
+    target_tid = tid_from_cookie or meta_tid
+
+    if target_tid:
+        t = await get_thread(target_tid)
         if t:
-            _set_active_thread_id(selected_tid)
-            await cl.Message(content=f"Resuming selected thread `{selected_tid[:8]}`.").send()
-        else:
-            ts = await ensure_active_thread()
-            if ts and ts.thread_id:
-                _set_active_thread_id(ts.thread_id)
-                await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
-            else:
-                await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
+            _set_active_thread_id(target_tid)
+            await cl.Message(content=f"Resuming thread `{target_tid[:8]}`.").send()
+            await _render_transcript(target_tid)
+            return  # We're done; don't override with 'newest'
+        # If unknown/forbidden, fall through to resume-newest
+
+    # Fallback: newest or create
+    ts = await ensure_active_thread()
+    if ts and ts.thread_id:
+        _set_active_thread_id(ts.thread_id)
+        await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
+        await _render_transcript(ts.thread_id)
     else:
-        ts = await ensure_active_thread()
-        if ts and ts.thread_id:
-            _set_active_thread_id(ts.thread_id)
-            await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
-        else:
-            await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
+        await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
 
 @cl.on_message
 async def handle_message(message: cl.Message):
@@ -68,7 +107,6 @@ async def handle_message(message: cl.Message):
         "web_search": is_web_search_enabled(),
     }
 
-    # Pull the Entra access token from the authenticated user metadata.
     app_user = cl.user_session.get("user")
     token = None
     if app_user and getattr(app_user, "metadata", None):

@@ -9,7 +9,7 @@ import httpx
 import chainlit as cl
 from chainlit.utils import mount_chainlit
 from fastapi import FastAPI, Response, Request
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from http.cookies import SimpleCookie
 
@@ -135,11 +135,11 @@ async def ui_rename_thread(thread_id: str, request: Request):
 
 @app.post("/ui/select_thread")
 async def ui_select_thread(body: Dict[str, str], response: Response):
+    # Kept for backward compatibility (used by deep-link helper below)
     tid = (body or {}).get("thread_id")
     if not tid:
         return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
     domain = os.getenv("COOKIE_DOMAIN") or None
-    # This cookie is NOT HttpOnly; JS writes it to switch thread
     response.set_cookie(key=TID_COOKIE, value=tid, httponly=False, secure=True,
                         samesite="lax", max_age=60*60*24*7, path="/", domain=domain)
     return {"ok": True, "thread_id": tid}
@@ -148,6 +148,27 @@ async def ui_select_thread(body: Dict[str, str], response: Response):
 async def ui_active_thread(request: Request):
     tid = _parse_cookies(request.headers.get("cookie")).get(TID_COOKIE)
     return {"thread_id": tid}
+
+# ---------- NEW: Deep link routes ----------
+@app.get("/open/t/{thread_id}")
+async def open_thread(thread_id: str):
+    """
+    Set the active thread cookie and land on /chat/?t=<thread_id>
+    so the URL stays bookmarkable AND Chainlit sees the cookie on first load.
+    """
+    domain = os.getenv("COOKIE_DOMAIN") or None
+    resp = RedirectResponse(url=f"/chat/?t={thread_id}")
+    resp.set_cookie(
+        key=TID_COOKIE,
+        value=thread_id,
+        httponly=False,  # JS may read it; it's not sensitive
+        secure=True,
+        samesite="lax",
+        max_age=60*60*24*7,
+        path="/",
+        domain=domain
+    )
+    return resp
 
 # ---------- Chainlit header-auth bridge ----------
 @cl.header_auth_callback
@@ -182,7 +203,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
-        # NEW: active thread id (if set by sidebar)
+        # Active thread id (set via /open/t/* or /ui/select_thread)
         "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)

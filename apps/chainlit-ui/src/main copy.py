@@ -2,7 +2,6 @@
 import os
 import httpx
 import chainlit as cl
-from chainlit.action import Action
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
 from threads_client import (
@@ -18,13 +17,6 @@ def _active_thread_id() -> str | None:
 def _set_active_thread_id(tid: str) -> None:
     cl.user_session.set("thread_id", tid)
 
-async def _render_controls():
-    # Keep the small inline control for manual testing (not the primary UX anymore).
-    await cl.Message(
-        content="**Controls:** Start a fresh chat thread (won't carry over context).",
-        actions=[Action(name="new_chat", payload={"value": "new"}, label="➕ New Chat")],
-    ).send()
-
 @cl.on_chat_start
 async def start():
     await inject_settings_ui()
@@ -34,19 +26,15 @@ async def start():
         await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
         return
 
-    # Respect a selection made from the left sidebar (cookie propagated via header_auth_callback)
-    selected_tid = None
-    if getattr(app_user, "metadata", None):
-        selected_tid = app_user.metadata.get("active_thread_id")
+    # Respect selection from sidebar (via cookie surfaced in metadata)
+    selected_tid = getattr(app_user, "metadata", {}).get("active_thread_id") if getattr(app_user, "metadata", None) else None
 
     if selected_tid:
-        # Validate ownership/visibility
         t = await get_thread(selected_tid)
         if t:
             _set_active_thread_id(selected_tid)
             await cl.Message(content=f"Resuming selected thread `{selected_tid[:8]}`.").send()
         else:
-            # Fallback: resume newest or create
             ts = await ensure_active_thread()
             if ts and ts.thread_id:
                 _set_active_thread_id(ts.thread_id)
@@ -54,24 +42,12 @@ async def start():
             else:
                 await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
     else:
-        # Resume newest or create one
         ts = await ensure_active_thread()
         if ts and ts.thread_id:
             _set_active_thread_id(ts.thread_id)
             await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
         else:
             await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
-
-    await _render_controls()
-
-@cl.action_callback("new_chat")
-async def _new_chat_action(action: Action):
-    ts = await create_new_thread()
-    if not ts:
-        await cl.Message(content="Could not create a new thread. Try again.").send()
-        return
-    _set_active_thread_id(ts.thread_id)
-    await cl.Message(content=f"Started new thread `{ts.thread_id[:8]}`.").send()
 
 @cl.on_message
 async def handle_message(message: cl.Message):
@@ -81,7 +57,7 @@ async def handle_message(message: cl.Message):
         if ts and ts.thread_id:
             _set_active_thread_id(ts.thread_id)
 
-    # Auto-title (first user turn only if untitled)
+    # Auto-title on first user turn if untitled
     if _active_thread_id():
         _ = await ensure_title(_active_thread_id(), message.content)
 
@@ -98,7 +74,6 @@ async def handle_message(message: cl.Message):
     if app_user and getattr(app_user, "metadata", None):
         token = app_user.metadata.get("access_token")
 
-    # Placeholder assistant message to stream into
     out = cl.Message(content="")
     await out.send()
 

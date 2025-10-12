@@ -135,7 +135,7 @@ async def ui_rename_thread(thread_id: str, request: Request):
 
 @app.post("/ui/select_thread")
 async def ui_select_thread(body: Dict[str, str], response: Response):
-    # Kept for backward compatibility (used by deep-link helper below)
+    # Back-compat helper (also used by the deep-link JS)
     tid = (body or {}).get("thread_id")
     if not tid:
         return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
@@ -149,7 +149,26 @@ async def ui_active_thread(request: Request):
     tid = _parse_cookies(request.headers.get("cookie")).get(TID_COOKIE)
     return {"thread_id": tid}
 
-# ---------- NEW: Deep link routes ----------
+# NEW: transcript proxy (tries both modern and fallback gateway paths)
+@app.get("/ui/transcript/{thread_id}")
+async def ui_transcript(thread_id: str, request: Request, limit: int = 200):
+    authz = _bearer_from_request(request)
+    if not authz:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    headers = {"authorization": authz}
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Preferred path: /api/threads/{id}/transcript
+        r = await client.get(f"{GATEWAY}/api/threads/{thread_id}/transcript?limit={int(limit)}", headers=headers)
+        if r.status_code == 404:
+            # Fallback to /api/transcript/{id}
+            r = await client.get(f"{GATEWAY}/api/transcript/{thread_id}?limit={int(limit)}", headers=headers)
+    try:
+        data = r.json()
+    except Exception:
+        data = {"messages": []}
+    return JSONResponse(data, status_code=r.status_code)
+
+# ---------- Deep link routes ----------
 @app.get("/open/t/{thread_id}")
 async def open_thread(thread_id: str):
     """
@@ -161,7 +180,7 @@ async def open_thread(thread_id: str):
     resp.set_cookie(
         key=TID_COOKIE,
         value=thread_id,
-        httponly=False,  # JS may read it; it's not sensitive
+        httponly=False,
         secure=True,
         samesite="lax",
         max_age=60*60*24*7,
