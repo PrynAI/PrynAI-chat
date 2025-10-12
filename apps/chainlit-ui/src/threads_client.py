@@ -137,6 +137,15 @@ async def ensure_title(thread_id: str, user_prompt: str) -> Optional[str]:
             return new_title
     return None
 
+# NEW: fetch persisted transcript for a thread
+async def list_messages(thread_id: str) -> list[dict]:
+    headers = _auth_headers()
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(f"{GATEWAY_BASE}/api/threads/{thread_id}/messages", headers=headers)
+        if r.status_code != 200:
+            return []
+        return r.json() or []
+
 # ---------- Transcript fetch + normalize ----------
 
 def _normalize_messages(payload) -> List[Dict[str, str]]:
