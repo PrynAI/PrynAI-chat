@@ -4,6 +4,3 @@
 button[aria-label="New Chat"] {
     display: none !important;
 }
-
-/* Defensive: if Chainlit renders a plain button with matching text, our JS also scrubs it,
-   but keep this here in case classnames drift. */

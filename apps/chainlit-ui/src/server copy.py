@@ -132,30 +132,16 @@ async def ui_rename_thread(thread_id: str, request: Request):
         r = await client.put(f"{GATEWAY}/api/threads/{thread_id}", json=payload, headers={"authorization": authz})
     return JSONResponse(r.json(), status_code=r.status_code)
 
-@app.delete("/ui/threads/{thread_id}")
-async def ui_delete_thread(thread_id: str, request: Request):
-    """Proxy delete; used by the sidebar '🗑' action."""
-    authz = _bearer_from_request(request)
-    if not authz:
-        return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.delete(f"{GATEWAY}/api/threads/{thread_id}", headers={"authorization": authz})
-    try:
-        data = r.json()
-    except Exception:
-        data = {"ok": False}
-    return JSONResponse(data, status_code=r.status_code)
-
-@app.post("/ui/clear_thread")
-async def ui_clear_thread(response: Response):
-    """Clear the active thread cookie (used if a deleted thread was active)."""
+@app.post("/ui/select_thread")
+async def ui_select_thread(body: Dict[str, str], response: Response):
+    # Back-compat; sidebar now uses /open/t/<id>, but keep this for older links.
+    tid = (body or {}).get("thread_id")
+    if not tid:
+        return JSONResponse({"ok": False, "error": "missing_thread_id"}, status_code=400)
     domain = os.getenv("COOKIE_DOMAIN") or None
-    response.delete_cookie(TID_COOKIE, path="/")
-    if domain:
-        response.delete_cookie(TID_COOKIE, path="/", domain=domain)
-    response.set_cookie(key=TID_COOKIE, value="", httponly=False, secure=True,
-                        samesite="lax", max_age=0, expires=0, path="/", domain=domain)
-    return {"ok": True}
+    response.set_cookie(key=TID_COOKIE, value=tid, httponly=False, secure=True,
+                        samesite="lax", max_age=60*60*24*7, path="/", domain=domain)
+    return {"ok": True, "thread_id": tid}
 
 @app.get("/ui/active_thread")
 async def ui_active_thread(request: Request):
@@ -205,6 +191,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
+        # <- critical: make the selected thread available to Chainlit start()
         "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)

@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -12,10 +10,8 @@ from pydantic import BaseModel, Field
 #  - create(): make a new thread
 #  - search(): list threads with filters (e.g., metadata={"user_id": ...})
 #  - get(): fetch a single thread
-#  - update(): update thread metadata (title) [may not exist on older SDKs]
-#  - delete(): delete a thread [may not exist on older SDKs]
-#
-# Our router gracefully falls back to "soft delete" if delete/update are missing.  :contentReference[oaicite:8]{index=8}
+#  - update(): update thread metadata (title) [available in newer SDKs]
+# Docs: Use threads + SDK reference. 
 
 class ThreadCreate(BaseModel):
     title: Optional[str] = Field(default=None, description="Optional friendly title for the thread")
@@ -37,39 +33,13 @@ def _summarize(t: Dict[str, Any]) -> ThreadSummary:
         updated_at=t.get("updated_at"),
     )
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def _deleted_ns(user_id: str) -> list[str]:
-    # Fallback soft-delete registry in Store (per-user)
-    return ["users", user_id, "deleted_threads"]
-
-async def _mark_deleted_in_store(client, user_id: str, thread_id: str) -> None:
-    try:
-        await client.store.put_item(
-            _deleted_ns(user_id),
-            key=thread_id,
-            value={"thread_id": thread_id, "deleted_at": _now_iso()},
-            index=["thread_id"],
-        )
-    except Exception:
-        pass
-
-async def _is_deleted_in_store(client, user_id: str, thread_id: str) -> bool:
-    try:
-        item = await client.store.get_item(_deleted_ns(user_id), key=thread_id)
-        return item is not None
-    except Exception:
-        return False
-
 def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRouter:
     """
     Endpoints:
-      POST   /api/threads         -> create a thread (metadata.user_id + optional title)
-      GET    /api/threads         -> list threads for current user (newest first; excludes deleted)
-      GET    /api/threads/{id}    -> read one thread (403 if not owned by user)
-      PUT    /api/threads/{id}    -> update title (best-effort; 405 if SDK lacks 'update')
-      DELETE /api/threads/{id}    -> delete (hard if available; soft-delete fallback)
+      POST /api/threads         -> create a thread (metadata.user_id + optional title)
+      GET  /api/threads         -> list threads for current user (newest first)
+      GET  /api/threads/{id}    -> read one thread (403 if not owned by user)
+      PUT  /api/threads/{id}    -> update title (best-effort; 405 if SDK lacks 'update')
     """
     router = APIRouter(prefix="/api/threads", tags=["threads"])
 
@@ -84,6 +54,7 @@ def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRou
         if payload.title:
             meta["title"] = payload.title
 
+        # Create the thread with our metadata
         t = await client.threads.create(metadata=meta)
         return _summarize(t)
 
@@ -94,23 +65,14 @@ def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRou
             raise HTTPException(status_code=401, detail="unauthenticated")
         user_id = user_id_from_claims(claims)
 
+        # Filter by owner, newest first
         items = await client.threads.search(
             metadata={"user_id": user_id},
             sort_by="updated_at",
             sort_order="desc",
             limit=limit,
         )
-        out: List[ThreadSummary] = []
-        for t in items or []:
-            meta = t.get("metadata") or {}
-            # Exclude soft-deleted threads (metadata flag)
-            if meta.get("deleted") is True:
-                continue
-            # Exclude soft-deleted threads recorded in Store fallback
-            if await _is_deleted_in_store(client, user_id, t.get("thread_id", "")):
-                continue
-            out.append(_summarize(t))
-        return out
+        return [_summarize(t) for t in items or []]
 
     @router.get("/{thread_id}", response_model=ThreadSummary)
     async def get_thread(thread_id: str, request: Request):
@@ -121,11 +83,7 @@ def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRou
 
         t = await client.threads.get(thread_id)
         if not t or (t.get("metadata") or {}).get("user_id") != user_id:
-            raise HTTPException(status_code=404, detail="not_found")
-
-        # If soft-deleted, hide existence.
-        meta = t.get("metadata") or {}
-        if meta.get("deleted") is True or await _is_deleted_in_store(client, user_id, thread_id):
+            # Hide existence from other users
             raise HTTPException(status_code=404, detail="not_found")
         return _summarize(t)
 
@@ -143,6 +101,7 @@ def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRou
         if not payload.title:
             return _summarize(t)
 
+        # Some SDK versions provide threads.update(); if not, return 405.
         if not hasattr(client.threads, "update"):
             raise HTTPException(status_code=405, detail="update_not_supported_by_sdk")
 
@@ -150,36 +109,5 @@ def make_threads_router(client, get_current_user, user_id_from_claims) -> APIRou
         new_meta["title"] = payload.title
         t2 = await client.threads.update(thread_id, metadata=new_meta)
         return _summarize(t2)
-
-    @router.delete("/{thread_id}")
-    async def delete_thread(thread_id: str, request: Request) -> Dict[str, Any]:
-        """
-        Hard delete if SDK exposes 'delete'; otherwise mark deleted in metadata or Store fallback.
-        """
-        claims = await get_current_user(request)
-        if not claims:
-            raise HTTPException(status_code=401, detail="unauthenticated")
-        user_id = user_id_from_claims(claims)
-
-        t = await client.threads.get(thread_id)
-        if not t or (t.get("metadata") or {}).get("user_id") != user_id:
-            raise HTTPException(status_code=404, detail="not_found")
-
-        # 1) Try hard delete
-        if hasattr(client.threads, "delete"):
-            await client.threads.delete(thread_id)
-            return {"ok": True, "mode": "hard"}
-
-        # 2) Try soft-delete via metadata
-        if hasattr(client.threads, "update"):
-            new_meta = dict(t.get("metadata") or {})
-            new_meta["deleted"] = True
-            new_meta["deleted_at"] = _now_iso()
-            await client.threads.update(thread_id, metadata=new_meta)
-            return {"ok": True, "mode": "soft:metadata"}
-
-        # 3) Final fallback: mark in Store registry so list() filters it out
-        await _mark_deleted_in_store(client, user_id, thread_id)
-        return {"ok": True, "mode": "soft:store"}
 
     return router
