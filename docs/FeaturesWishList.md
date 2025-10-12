@@ -7,10 +7,10 @@ Must Have
 - Microsoft entra external id setup with oauth 2.0 authentication with email and google - Done -  Done
 
 
-- Profiles (Gateway) — create/read user profile in LangGraph Store
-- Threads API (Gateway) — create & list
-- UI bridge for tokens — minimal first, elegant later
-- Agent: enable the checkpointer (short‑term memory)
+- Profiles (Gateway) — create/read user profile in LangGraph Store - Done
+- Threads API (Gateway) — create & list -Done
+- UI bridge for tokens — Done
+- Agent: enable the checkpointer (short‑term memory) -Done
 - History pane (UI)
 - Long‑term memory (after threads & history)
 

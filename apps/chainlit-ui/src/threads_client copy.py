@@ -24,12 +24,10 @@ def _auth_headers() -> Dict[str, str]:
     return h
 
 async def ensure_active_thread() -> Optional[ThreadSummary]:
-    """
-    Try to resume the newest thread for this user. If none, create one.
-    """
+    """Resume newest thread or create one if none exists (current behavior)."""
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
-        # 1) Resume newest
+        # Resume newest
         try:
             r = await client.get(f"{GATEWAY_BASE}/api/threads?limit=1", headers=headers)
             if r.status_code == 200:
@@ -39,7 +37,7 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
                     return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"))
         except Exception:
             pass
-        # 2) Create
+        # Create
         try:
             r = await client.post(f"{GATEWAY_BASE}/api/threads", json={}, headers=headers)
             if r.status_code == 200:
@@ -47,4 +45,15 @@ async def ensure_active_thread() -> Optional[ThreadSummary]:
                 return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"))
         except Exception:
             pass
+    return None
+
+async def create_new_thread(title: Optional[str] = None) -> Optional[ThreadSummary]:
+    """Create a brand new thread unconditionally (used by our New Chat action)."""
+    headers = _auth_headers()
+    payload = {"title": title} if title else {}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(f"{GATEWAY_BASE}/api/threads", json=payload, headers=headers)
+        if r.status_code == 200:
+            t = r.json()
+            return ThreadSummary(thread_id=t["thread_id"], title=t.get("title"))
     return None

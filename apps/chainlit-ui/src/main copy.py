@@ -2,9 +2,10 @@
 import os
 import httpx
 import chainlit as cl
+from chainlit.action import Action
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
-from threads_client import ensure_active_thread
+from threads_client import ensure_active_thread, create_new_thread
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 
@@ -14,23 +15,39 @@ def _active_thread_id() -> str | None:
 def _set_active_thread_id(tid: str) -> None:
     cl.user_session.set("thread_id", tid)
 
+async def _render_controls():
+    # A tiny control row so testers can always start a truly new backend thread
+    await cl.Message(
+        content="**Controls:** Start a fresh chat thread (won't carry over context).",
+        actions=[Action(name="new_chat", payload={"value": "new"}, label="➕ New Chat")],
+    ).send()
+
 @cl.on_chat_start
 async def start():
-    await inject_settings_ui()
-    app_user = cl.user_session.get("user")  # set by Chainlit after auth succeeds
+    await inject_settings_ui()  # Web Search toggle (unchanged)
+    app_user = cl.user_session.get("user")
     if not app_user:
-        await cl.Message(
-            content="You're not signed in. [Click here to sign in](/auth) then return to chat."
-        ).send()
+        await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
         return
 
+    # Resume newest thread or create one if none (keeps your passing tests 1–3)
     ts = await ensure_active_thread()
     if ts and ts.thread_id:
         _set_active_thread_id(ts.thread_id)
-        short = ts.thread_id[:8]
-        await cl.Message(content=f"Resuming thread `{short}`.").send()
+        await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
     else:
         await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
+
+    await _render_controls()
+
+@cl.action_callback("new_chat")
+async def _new_chat_action(action: Action):
+    ts = await create_new_thread()
+    if not ts:
+        await cl.Message(content="Could not create a new thread. Try again.").send()
+        return
+    _set_active_thread_id(ts.thread_id)
+    await cl.Message(content=f"Started new thread `{ts.thread_id[:8]}`.").send()
 
 @cl.on_message
 async def handle_message(message: cl.Message):
@@ -40,7 +57,7 @@ async def handle_message(message: cl.Message):
         if ts and ts.thread_id:
             _set_active_thread_id(ts.thread_id)
 
-    endpoint = f"{GATEWAY_BASE}/api/chat/stream"
+    endpoint = f"{GATEWAY_BASE.rstrip('/')}/api/chat/stream"
     payload = {
         "message": message.content,
         "thread_id": _active_thread_id(),
@@ -53,6 +70,7 @@ async def handle_message(message: cl.Message):
     if app_user and getattr(app_user, "metadata", None):
         token = app_user.metadata.get("access_token")
 
+    # Placeholder assistant message to stream into
     out = cl.Message(content="")
     await out.send()
 
@@ -63,6 +81,12 @@ async def handle_message(message: cl.Message):
     try:
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+                # Helpful error surface (otherwise you'd see a silent empty message)
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", errors="ignore")[:500]
+                    await cl.Message(content=f"**Gateway error {resp.status_code}:** {body}").send()
+                    return
+
                 current_event = "message"
                 async for raw_line in resp.aiter_lines():
                     if not raw_line:
