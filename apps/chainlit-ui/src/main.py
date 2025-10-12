@@ -18,8 +18,8 @@ def _set_active_thread_id(tid: str) -> None:
 async def _render_controls():
     # Render a tiny control row so testers can start a truly new backend thread
     await cl.Message(
-        content="**Controls:** Start a fresh chat thread (won’t carry over context).",
-        actions=[Action(name="new_chat", value="new", label="➕ New Chat")],
+        content="**Controls:** Start a fresh chat thread (won't carry over context).",
+        actions=[Action(name="new_chat", payload={"value": "new"}, label="➕ New Chat")],
     ).send()
 
 @cl.on_chat_start
