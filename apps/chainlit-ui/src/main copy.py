@@ -1,10 +1,18 @@
+# apps/chainlit-ui/src/main.py
 import os
 import httpx
 import chainlit as cl
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
+from threads_client import ensure_active_thread
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+
+def _active_thread_id() -> str | None:
+    return cl.user_session.get("thread_id")
+
+def _set_active_thread_id(tid: str) -> None:
+    cl.user_session.set("thread_id", tid)
 
 @cl.on_chat_start
 async def start():
@@ -14,15 +22,28 @@ async def start():
         await cl.Message(
             content="You're not signed in. [Click here to sign in](/auth) then return to chat."
         ).send()
+        return
+
+    ts = await ensure_active_thread()
+    if ts and ts.thread_id:
+        _set_active_thread_id(ts.thread_id)
+        short = ts.thread_id[:8]
+        await cl.Message(content=f"Resuming thread `{short}`.").send()
     else:
-        await cl.Message(content="Hi! I'm ready.").send()
+        await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
 
 @cl.on_message
 async def handle_message(message: cl.Message):
+    # Defensive: if the session lost the thread, ensure one exists now.
+    if not _active_thread_id():
+        ts = await ensure_active_thread()
+        if ts and ts.thread_id:
+            _set_active_thread_id(ts.thread_id)
+
     endpoint = f"{GATEWAY_BASE}/api/chat/stream"
     payload = {
         "message": message.content,
-        "thread_id": None,  # hook threads later
+        "thread_id": _active_thread_id(),
         "web_search": is_web_search_enabled(),
     }
 

@@ -1,0 +1,5 @@
+/* Best-effort: hide Chainlit’s built-in "New chat" header button */
+[data-testid="new-chat-button"],
+button[aria-label="New Chat"] {
+    display: none !important;
+}
