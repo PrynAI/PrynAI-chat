@@ -5,32 +5,27 @@ Must Have
 - Internet Search(OpenAI-"web-search") - Done 
 - security gaurdrails - OpenAI moderation model - Done
 - Microsoft entra external id setup with oauth 2.0 authentication with email and google - Done -  Done
-
-
 - Profiles (Gateway) — create/read user profile in LangGraph Store - Done
 - Threads API (Gateway) — create & list -Done
 - UI bridge for tokens — Done
 - Agent: enable the checkpointer (short‑term memory) -Done
-- History pane (UI)
+- History pane (UI) - Done 
 - Long‑term memory (after threads & history)
-
-
-
-- Chat Persistance-InSession memory (ShortTerm memory)
-- when closing the chat and reopening the chat session memory, should persist (LongTerm Memory)
-- While selecting new chat , the current chat should go in to chat history with out loosing the chat content
-- Ofcourse all these should be stored in a user profile that is logged in . Hence user profile should be created 
+- Response structure output:
+    The OpenAI API returns plain text with Markdown syntax.
+    chat gpt renders that Markdown into styled HTML.
+    If you want the same look:
+	•	Use a Markdown renderer (like react-markdown, marked, or markdown-it)
 - File upload (pdfs, docx, txt)
 - user profile settings
 - Arcade Connectors
-- user signup - signin
-- user authentication through providers to signup
+- RAG integration with realtime enviornmental CO2 emission data 
 - pay pricing (subscrition or token based)
 - vendor gateway payment
 
 
 Should have :
-- search chat history
+
 - highlight the note to turn on internet search from setting if you want data from June 2024
 
 

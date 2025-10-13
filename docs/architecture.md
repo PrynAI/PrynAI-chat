@@ -4,8 +4,7 @@
 
 ### Edge & Identity
   • DNS (GoDaddy): CNAME chat.prynai.com → Azure Front Door (recommended) OR ACA public FQDN
-  • Azure Front Door (Premium): TLS termination + WAF + optional Private Link to ACA (no public ingress)
-  • Microsoft Entra External ID (CIAM): Google, Microsoft, Apple sign‑in → issues JWT
+  • Microsoft Entra External ID (CIAM): Google sign‑in → issues JWT
 
 ### Application — Azure Container Apps (one environment, two apps)
   • Chainlit (UI)
@@ -24,7 +23,7 @@
   • Observability: LangSmith tracing, dashboards, evals
 ### External Tools & Models
   • OpenAI API (chat/reasoning/embeddings; streamed responses)
-  • Tavily Search (web)
+  • Open AI Web search
   • MCP tools via Arcade:
       – Gmail, Google Calendar
       – Outlook Mail, Outlook Calendar
@@ -41,6 +40,6 @@
   1) Browser → Front Door (TLS/WAF) → Chainlit (ACA)
   2) Chainlit (WebSocket) → FastAPI (JWT)
   3) FastAPI → LangGraph Platform (invoke graph)
-  4) LangGraph → (as needed) OpenAI / Tavily / Arcade MCP tools
+  4) LangGraph → (as needed) OpenAI  / Arcade MCP tools
   5) LangGraph ↔ Postgres Store (pgvector) for long‑term memory
   6) Streamed tokens ← FastAPI ← Chainlit ← Browser (TTFT-first)
