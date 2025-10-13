@@ -40,7 +40,7 @@ class ExtractedMemories(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memories: List[str] = Field(
-        default_factory=list,
+        ...,
         description="Short, durable facts or preferences. Leave empty if nothing stable to store.",
     )
 
