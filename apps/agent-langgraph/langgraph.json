@@ -1,11 +1,18 @@
 {
     "$schema": "https://langgra.ph/schema.json",
-    "dependencies": [
-        "."
-    ],
+    "dependencies": ["."],
     "graphs": {
         "chat": "./my_agent/graphs/chat.py:graph"
     },
     "env": ".env",
-    "python_version": "3.11"
+    "python_version": "3.11",
+    "store": {
+        "index": {
+            "embed": "openai:text-embedding-3-small",
+            "dims": 1536,
+            "fields": [
+                "$"
+            ]
+        }
+    }
 }

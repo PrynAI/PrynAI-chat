@@ -22,6 +22,7 @@ Must Have
 - RAG integration with realtime enviornmental CO2 emission data 
 - pay pricing (subscrition or token based)
 - vendor gateway payment
+- https://docs.langchain.com/oss/python/langgraph/persistence#replay
 
 
 Should have :
