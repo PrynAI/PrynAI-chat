@@ -6,19 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict  # <-- add ConfigDict
 from langgraph.store.base import BaseStore
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage
 
 
 # ----- Namespaces (per-user) -------------------------------------------------
-# Keep memories user-scoped so search is cross-thread but private to the user.
-# We create two "kinds" of memory:
-#  - user:   durable preferences/facts about the user (helpful across threads)
-#  - episodic: brief, search-friendly turn-summaries (topic/tasks asked)
-#
-# NOTE: Namespaces are tuples. You can evolve them later without breaking keys.
 def ns_user(user_id: str) -> Tuple[str, ...]:
     return ("users", user_id, "memories", "user")
 
@@ -28,8 +22,7 @@ def ns_episodic(user_id: str) -> Tuple[str, ...]:
 
 # ----- LLM for small classification/summarization tasks ----------------------
 def _memory_llm() -> ChatOpenAI:
-    # A small, cheap model is enough for extraction/summarization.
-    # We use Responses API so it's consistent with your main model stack.
+    # Responses API so we can use structured outputs.
     return ChatOpenAI(
         model="gpt-5-mini",
         temperature=0.0,
@@ -43,6 +36,9 @@ def _memory_llm() -> ChatOpenAI:
 # ----- Schemas for structured extraction ------------------------------------
 class ExtractedMemories(BaseModel):
     """Model for extracting stable, durable user memories."""
+    # STRICT: force "additionalProperties": false at the root for Responses API
+    model_config = ConfigDict(extra="forbid")
+
     memories: List[str] = Field(
         default_factory=list,
         description="Short, durable facts or preferences. Leave empty if nothing stable to store.",
@@ -52,7 +48,6 @@ class ExtractedMemories(BaseModel):
 # ----- Public API ------------------------------------------------------------
 @dataclass
 class RetrievedMemory:
-    """Shape returned by search combination."""
     key: str
     text: str
     score: float
@@ -66,13 +61,11 @@ def search_relevant_memories(
     k_user: int = 4,
     k_episodic: int = 4,
 ) -> List[RetrievedMemory]:
-    """Search both namespaces; combine & sort by similarity (higher first)."""
     results: List[RetrievedMemory] = []
 
     try:
         user_hits = store.search(ns_user(user_id), query=query, limit=k_user) or []
         for it in user_hits:
-            # .value is the dict we stored; .score is the similarity score
             txt = (it.value or {}).get("text") or ""
             results.append(RetrievedMemory(key=str(it.key), text=txt, score=float(getattr(it, "score", 0.0)), kind="user"))
     except Exception:
@@ -86,12 +79,10 @@ def search_relevant_memories(
     except Exception:
         pass
 
-    # Sort desc by score
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 
 def memory_context_system_message(items: Iterable[RetrievedMemory], max_chars: int = 900) -> Optional[SystemMessage]:
-    """Format retrieved memories into a compact system tip for the LLM."""
     bulleted: List[str] = []
     for r in items:
         prefix = "•" if r.kind == "user" else "–"
@@ -99,7 +90,6 @@ def memory_context_system_message(items: Iterable[RetrievedMemory], max_chars: i
     txt = "\n".join(bulleted).strip()
     if not txt:
         return None
-    # Trim to avoid overwhelming the prompt
     if len(txt) > max_chars:
         txt = txt[: max_chars - 20].rstrip() + " …"
     out = (
@@ -131,7 +121,9 @@ def maybe_write_user_memories(
         "Return JSON with a 'memories' list."
     )
     doc = [{"role": "system", "content": instr}, {"role": "user", "content": last_user_text}]
-    parsed = llm.with_structured_output(ExtractedMemories).invoke(doc)
+
+    # STRICT schema + Responses API
+    parsed = llm.with_structured_output(ExtractedMemories, strict=True).invoke(doc)
 
     added = 0
     for m in (parsed.memories or [])[:3]:
@@ -145,12 +137,10 @@ def maybe_write_user_memories(
             "source_thread": thread_id,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
-        # Index the `text` field; store config enables vector indexing (pgvector).
         try:
             store.put(ns_user(user_id), key=key, value=value, index=["text"])
             added += 1
         except Exception:
-            # best-effort; never break the chat
             pass
     return added
 
@@ -161,9 +151,6 @@ def write_episodic_summary(
     user_text: str,
     assistant_text: str,
 ) -> Optional[str]:
-    """
-    Store a concise, search-friendly single-line summary of the turn.
-    """
     if not (user_id and user_text and assistant_text):
         return None
 
