@@ -11,7 +11,7 @@ Must Have
 - Agent: enable the checkpointer (short‑term memory) -Done
 - History pane (UI) - Done 
 - Long‑term memory (after threads & history) -Done
-- Response structure output:
+- Response structure output:- Done
     The OpenAI API returns plain text with Markdown syntax.
     chat gpt renders that Markdown into styled HTML.
     If you want the same look:
@@ -64,6 +64,10 @@ now i can see my chat history now my prompts are working
 how can we keep cookies forever with out expiry so that only when users signsout it should create new cookie . 
 
 because chainlit ui expires every day but not Microsoft authentication . 
+
+every deployment to container . app is being broken to fix i need to click signout and i get message on login so i click referesh login page then it redirects to auth and it automatically signs in and then load page and the prompt works
+
+how come we browser retain cookies after deployments ? So that browser remain logged in
 
 
 

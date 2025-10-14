@@ -4,8 +4,7 @@
 # - Streams model output to the UI via SSE
 # - Forwards web_search and thread_id to LangGraph
 # - Adds CORS for localhost + your chat domain
-# - /api/profile, /api/threads, and /api/threads/{id}/messages routes (LangGraph Store)
-# - (Optional) mounts /api/uploads if the feature module is present
+# - /api/profile routes backed by LangGraph Store (durable user profile)
 #
 # Env required:
 #   OIDC_DISCOVERY_URL = https://<subdomain>.ciamlogin.com/<tenant-id>/v2.0/.well-known/openid-configuration
@@ -40,8 +39,6 @@ from src.auth.entra import get_current_user, user_id_from_claims, AuthError
 
 app = FastAPI(title="PrynAI Gateway", version="1.3")
 
-# ---- CORS --------------------------------------------------------------------
-
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://chat.prynai.com",
@@ -54,13 +51,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Moderation --------------------------------------------------------------
-
 OAI = OpenAI()
 MOD_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() == "true"
 MOD_MODEL = os.getenv("MODERATION_MODEL", "omni-moderation-latest")
-
-# ---- LangGraph client --------------------------------------------------------
 
 LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]
 GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
@@ -68,30 +61,12 @@ GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
 client = get_client(url=LANGGRAPH_URL)
 remote = RemoteGraph(GRAPH_NAME, client=client)
 
-# ---- Routers -----------------------------------------------------------------
-
-# Durable user profile (Store-backed)
+# Routers
 app.include_router(make_profiles_router(client, get_current_user, user_id_from_claims))
-
-# Threads CRUD (per-user), soft/hard delete fallbacks
 app.include_router(make_threads_router(client, get_current_user, user_id_from_claims))
-
-# Transcript per thread (user/assistant messages for reload)
 app.include_router(make_transcript_router(client, get_current_user, user_id_from_claims))
 
-# Optional: File uploads feature (mounted only if present)
-try:
-    # Import here so the whole app doesn't fail if the module is missing.
-    from src.features.uploads import make_uploads_router  # type: ignore
-
-    # Pass auth helpers so routes remain user-scoped/secure.
-    app.include_router(make_uploads_router(get_current_user, user_id_from_claims))
-except Exception:
-    # If the feature module isn’t present , keep running without uploads.
-    pass
-
-
-# ---- Helpers to extract text from streamed LangGraph items -------------------
+# ---- Helpers to extract text from streamed items --------------------------------
 
 def _blocks_to_text(blocks: Any) -> str:
     if isinstance(blocks, str):
@@ -129,7 +104,7 @@ def _chunk_to_text(chunk: Any) -> str:
         return chunk
     return ""
 
-# ---- SSE framing (spec-compliant) -------------------------------------------
+# ---- SSE framing (spec-compliant) ---------------------------------------------
 
 def _sse_event_from_text(text: str) -> bytes:
     """
@@ -141,7 +116,7 @@ def _sse_event_from_text(text: str) -> bytes:
     payload = "data: " + t.replace("\n", "\ndata: ")
     return (payload + "\n\n").encode("utf-8")
 
-# ---- Health & identity -------------------------------------------------------
+# ---- Health & identity --------------------------------------------------------
 
 @app.get("/healthz")
 def healthz():
@@ -167,7 +142,7 @@ def _moderate_or_raise(text: str) -> dict:
         raise ValueError("blocked_by_moderation")
     return {"flagged": False}
 
-# ---- Chat streaming ----------------------------------------------------------
+# ---- Chat streaming -----------------------------------------------------------
 
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatIn, request: Request):
