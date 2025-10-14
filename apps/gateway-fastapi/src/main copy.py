@@ -1,17 +1,23 @@
 # apps/gateway-fastapi/src/main.py
 # Production-ready FastAPI gateway:
 # - Validates Microsoft Entra External ID (CIAM) access tokens
-# - Streams model output to the UI via SSE
+# - Streams model output to the UI via SSE (unchanged from MVP-0)
 # - Forwards web_search and thread_id to LangGraph
 # - Adds CORS for localhost + your chat domain
-# - /api/profile routes backed by LangGraph Store (durable user profile)
+# - NEW: /api/profile routes backed by LangGraph Store (durable user profile)
 #
 # Env required:
 #   OIDC_DISCOVERY_URL = https://<subdomain>.ciamlogin.com/<tenant-id>/v2.0/.well-known/openid-configuration
-#   OIDC_AUDIENCE      = <Gateway API client ID GUID>
+#   OIDC_AUDIENCE      = <Gateway API client ID GUID>     # You confirmed GUID works best
 #   LANGGRAPH_URL, LANGGRAPH_GRAPH=chat
 #   MODERATION_ENABLED=true|false, MODERATION_MODEL=omni-moderation-latest
+#
+# References:
+# - LangGraph streaming (astream, stream_mode="messages"). :contentReference[oaicite:6]{index=6}
+# - FastAPI CORS middleware. :contentReference[oaicite:7]{index=7}
+# - LangGraph SDK, Store operations (get_item/put_item). :contentReference[oaicite:8]{index=8}
 
+# apps/gateway-fastapi/src/main.py
 from __future__ import annotations
 
 import os
@@ -30,14 +36,16 @@ from openai import OpenAI
 from src.features.websearch import ChatIn, build_langgraph_config
 from src.features.profiles import make_profiles_router, ensure_profile
 from src.features.threads import make_threads_router
+# NEW: transcript feature
 from src.features.transcript import (
     make_transcript_router,
     append_transcript,
     TranscriptMessage,
 )
+
 from src.auth.entra import get_current_user, user_id_from_claims, AuthError
 
-app = FastAPI(title="PrynAI Gateway", version="1.3")
+app = FastAPI(title="PrynAI Gateway", version="1.2")
 
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -61,12 +69,11 @@ GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
 client = get_client(url=LANGGRAPH_URL)
 remote = RemoteGraph(GRAPH_NAME, client=client)
 
-# Routers
+# Profiles + Threads routers (unchanged)
 app.include_router(make_profiles_router(client, get_current_user, user_id_from_claims))
 app.include_router(make_threads_router(client, get_current_user, user_id_from_claims))
+# NEW: Transcript route
 app.include_router(make_transcript_router(client, get_current_user, user_id_from_claims))
-
-# ---- Helpers to extract text from streamed items --------------------------------
 
 def _blocks_to_text(blocks: Any) -> str:
     if isinstance(blocks, str):
@@ -104,20 +111,6 @@ def _chunk_to_text(chunk: Any) -> str:
         return chunk
     return ""
 
-# ---- SSE framing (spec-compliant) ---------------------------------------------
-
-def _sse_event_from_text(text: str) -> bytes:
-    """
-    Build one SSE event for a whole text chunk.
-    - Normalizes newlines to '\n'
-    - Emits multiple 'data:' lines inside a single event to preserve line breaks
-    """
-    t = text.replace("\r\n", "\n").replace("\r", "\n")
-    payload = "data: " + t.replace("\n", "\ndata: ")
-    return (payload + "\n\n").encode("utf-8")
-
-# ---- Health & identity --------------------------------------------------------
-
 @app.get("/healthz")
 def healthz():
     return JSONResponse({"ok": True})
@@ -142,13 +135,11 @@ def _moderate_or_raise(text: str) -> dict:
         raise ValueError("blocked_by_moderation")
     return {"flagged": False}
 
-# ---- Chat streaming -----------------------------------------------------------
-
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatIn, request: Request):
     """
     Streams model output; forwards thread_id + web_search in config.
-    Also ensures a user profile exists and appends transcript for UI replay.
+    Also ensures a user profile exists and (NEW) appends transcript for UI replay.
     """
     # 1) AUTHN
     try:
@@ -175,7 +166,7 @@ async def stream_chat(payload: ChatIn, request: Request):
     config = build_langgraph_config(payload)
     config.setdefault("configurable", {})["user_id"] = user_id
 
-    # 2b) Ensure a profile exists (best-effort)
+    # 2b) Ensure a profile exists
     try:
         await ensure_profile(client, user_id, claims=claims)
     except Exception:
@@ -220,9 +211,9 @@ async def stream_chat(payload: ChatIn, request: Request):
                 text = _chunk_to_text(msg_chunk)
                 if text:
                     acc.append(text)
-                    # Emit ONE SSE event for the whole chunk; multiple data: lines preserve newlines.
-                    yield _sse_event_from_text(text)
-
+                    safe = text.replace("\r\n", "\n").replace("\r", "\n")
+                    for line in safe.split("\n"):
+                        yield f"data: {line}\n\n".encode("utf-8")
             # (Optional) output moderation notice
             if MOD_ENABLED and acc:
                 try:
@@ -236,7 +227,7 @@ async def stream_chat(payload: ChatIn, request: Request):
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
         finally:
-            # Append assistant transcript after stream completes
+            # NEW: append assistant transcript after stream completes
             if thread_id and acc:
                 try:
                     await append_transcript(

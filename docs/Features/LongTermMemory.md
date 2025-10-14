@@ -33,7 +33,7 @@
 
 - Value shape: { "text": <short fact>, "type": "user", "source_thread": <thread_id>, "ts": <ISO> }
 
-- Examples: “Lives in London”, “Nickname is DG”, “Prefers concise bullet answers”
+- Examples: “Lives in London”, “Nickname is RS”, “Prefers concise bullet answers”
 
 
 ### Episodic summaries (search‑friendly one‑liners of a turn)

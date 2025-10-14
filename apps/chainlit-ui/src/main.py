@@ -106,7 +106,7 @@ async def handle_message(message: cl.Message):
                     else:
                         # Our gateway sends one SSE event per *line* (it splits on "\n").
                         # Re-add a newline so Markdown retains structure while streaming.
-                        await out.stream_token(data + "\n")
+                        await out.stream_token(data)
 
         await out.update()
     except Exception as e:

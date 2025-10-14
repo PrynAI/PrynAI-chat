@@ -7,6 +7,7 @@ from settings_websearch import inject_settings_ui, is_web_search_enabled
 from threads_client import (
     ensure_active_thread, get_thread, ensure_title, list_messages
 )
+from sse_utils import iter_sse_events  # Import the SSE parser utility
 
 GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 
@@ -37,7 +38,6 @@ async def start():
         await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
         return
 
-    # Prefer the thread id set by the UI deep-link cookie (exposed by header_auth_callback)
     meta_tid = None
     if getattr(app_user, "metadata", None):
         meta_tid = app_user.metadata.get("active_thread_id")
@@ -49,7 +49,6 @@ async def start():
             await cl.Message(content=f"Resuming thread `{meta_tid[:8]}`.").send()
             await _render_transcript(meta_tid)
             return
-        # if not found/forbidden, fall back to newest-or-create
 
     ts = await ensure_active_thread()
     if ts and ts.thread_id:
@@ -96,23 +95,19 @@ async def handle_message(message: cl.Message):
                     await cl.Message(content=f"**Gateway error {resp.status_code}:** {body}").send()
                     return
 
-                current_event = "message"
-                async for raw_line in resp.aiter_lines():
-                    if not raw_line:
-                        continue
-                    if raw_line.startswith("event: "):
-                        current_event = raw_line.split("event: ", 1)[1].strip()
-                        if current_event == "done":
-                            break
-                        continue
-                    if raw_line.startswith("data: "):
-                        data = raw_line[6:]
-                        if current_event == "policy":
-                            await cl.Message(content=f"**Safety notice:** {data}").send()
-                        elif current_event == "error":
-                            await cl.Message(content=f"**Error:** {data}").send()
-                        else:
-                            await out.stream_token(data)
+                # Spec-compliant SSE parse with preserved newlines.
+                async for event, data in iter_sse_events(resp):
+                    if event == "done":
+                        break
+                    elif event == "policy":
+                        await cl.Message(content=f"**Safety notice:** {data}").send()
+                    elif event == "error":
+                        await cl.Message(content=f"**Error:** {data}").send()
+                    else:
+                        # Our gateway sends one SSE event per *line* (it splits on "\n").
+                        # Re-add a newline so Markdown retains structure while streaming.
+                        await out.stream_token(data + "\n")
+
         await out.update()
     except Exception as e:
         await cl.Message(content=f"**Error:** {e}").send()
