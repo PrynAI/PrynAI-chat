@@ -52,5 +52,19 @@ Better error handling: Instead of letting the server close the stream abruptly, 
 Revision hygiene: Keep only one ingress‑enabled revision active to avoid routing users to older builds with different auth wiring.
 
 
+next day i come and browse chat.prynai.com i can login to my profile there is not chat history and when do any prompt i get response as 
+
+Error: peer closed connection without sending complete message body (incomplete chunked read)
+
+to resolve this i had to . go to right profile and click sign out 
+after clikcing to signout it takes me to auth page then i have to sign-in and then refresh token and then it takes me to chat.prynai.com profile page
+
+now i can see my chat history now my prompts are working
+
+how can we keep cookies forever with out expiry so that only when users signsout it should create new cookie . 
+
+because chainlit ui expires every day but not Microsoft authentication . 
+
+
 
 

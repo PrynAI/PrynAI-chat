@@ -1,0 +1,43 @@
+/* apps/chainlit-ui/src/public/markdown-theme.css */
+.cl-root pre {
+    background: #0f0f13;
+    border: 1px solid #2a2a2e;
+    padding: 12px 14px;
+    border-radius: 8px;
+    overflow: auto;
+}
+
+.cl-root code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: .95em;
+}
+
+.cl-root p code {
+    background: rgba(127, 127, 127, .15);
+    padding: 0 .25em;
+    border-radius: 4px;
+}
+
+.cl-root blockquote {
+    border-left: 3px solid #7b5cff;
+    margin: .5rem 0;
+    padding: .25rem .75rem;
+    opacity: .9;
+}
+
+.cl-root table {
+    border-collapse: collapse;
+    margin: .75rem 0;
+}
+
+.cl-root th,
+.cl-root td {
+    border: 1px solid #2a2a2e;
+    padding: .4rem .6rem;
+}
+
+.cl-root h1,
+.cl-root h2,
+.cl-root h3 {
+    margin: .8rem 0 .4rem;
+}

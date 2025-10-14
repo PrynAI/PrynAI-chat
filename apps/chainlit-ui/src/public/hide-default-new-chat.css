@@ -1,4 +1,6 @@
 /* apps/chainlit-ui/src/public/hide-default-new-chat.css */
+@import url('/public/markdown-theme.css');
+
 /* Hide Chainlit’s built-in "New Chat" controls (header or body) using stable selectors */
 [data-testid="new-chat-button"],
 button[aria-label="New Chat"] {
