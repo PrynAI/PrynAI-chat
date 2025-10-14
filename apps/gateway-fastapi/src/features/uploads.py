@@ -21,15 +21,22 @@ MAX_FILES = 5
 MAX_FILE_MB = 10
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 CHUNK = 512 * 1024  # 512 KiB
+
 # Keep the attachments context compact for TTFT/TPOT and model tokens
 MAX_CHARS_PER_FILE = 12000
 MAX_TOTAL_CHARS = 24000
+
+# OCR controls (OFF by default)
+OCR_BACKEND = (os.getenv("UPLOADS_OCR", "none") or "none").strip().lower()  # "none" | "tesseract"
+OCR_MAX_PAGES = int(os.getenv("UPLOADS_OCR_MAX_PAGES", "10"))
+OCR_DPI = int(os.getenv("UPLOADS_OCR_DPI", "180"))
+OCR_LANG = os.getenv("UPLOADS_OCR_LANG", "eng")
 
 # Allowed extensions (lowercased, with dot)
 ALLOWED_EXTS = {
     # Documents & Data
     ".pdf", ".docx", ".txt", ".csv", ".pptx", ".xlsx", ".json", ".xml",
-    # Images (we don't OCR; we only list metadata)
+    # Images (OCR optional)
     ".png", ".jpg", ".jpeg", ".gif",
     # Code/text
     ".py", ".js", ".html", ".css", ".yaml", ".yml", ".sql", ".ipynb", ".md",
@@ -53,7 +60,7 @@ async def read_limited(file: UploadFile) -> bytes:
             break
         total += len(chunk)
         if total > MAX_FILE_BYTES:
-            raise HTTPException(status_code=413, detail=f"file_too_large:{file.filename}")
+            raise HTTPException(status_code=413, detail=f"File too large. Max allowed size is: {MAX_FILE_MB} MB")
         buf.write(chunk)
     return buf.getvalue()
 
@@ -66,6 +73,8 @@ def _xml_to_text(b: bytes) -> str:
     s = b.decode("utf-8", errors="ignore")
     s = re.sub(r"<[^>]+>", " ", s)
     return _clean_text(html.unescape(s))
+
+# ---------- lightweight parsers (no OCR) ----------
 
 def _try_pdf_text(b: bytes) -> Optional[str]:
     try:
@@ -132,8 +141,46 @@ def _try_ipynb_text(b: bytes) -> Optional[str]:
     except Exception:
         return None
 
+# ---------- OCR helpers (optional) ----------
+
+def _ocr_image_tesseract(img_bytes: bytes) -> str:
+    try:
+        from PIL import Image
+        import pytesseract
+        img = Image.open(io.BytesIO(img_bytes))
+        txt = pytesseract.image_to_string(img, lang=OCR_LANG)
+        return _clean_text(txt or "")
+    except Exception:
+        return ""
+
+def _ocr_pdf_tesseract(b: bytes, *, max_pages: int, dpi: int) -> str:
+    # Render first N pages with PyMuPDF and OCR them
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return ""
+    out: List[str] = []
+    try:
+        doc = fitz.open("pdf", b)
+        pages = min(len(doc), max_pages)
+        for i in range(pages):
+            page = doc.load_page(i)
+            # Only OCR when text extraction is empty
+            if (page.get_text("text") or "").strip():
+                out.append(_clean_text(page.get_text("text")))
+                continue
+            pm = page.get_pixmap(dpi=dpi, alpha=False)
+            ocr_txt = _ocr_image_tesseract(pm.tobytes("png"))
+            if ocr_txt:
+                out.append(ocr_txt)
+    except Exception:
+        pass
+    return _clean_text("\n\n".join([t for t in out if t]))
+
+# ---------- public: extract_text() ----------
+
 def extract_text(name: str, mime: str, data: bytes) -> str:
-    """Best-effort, pure-Python extraction (semantic-only)."""
+    """Best-effort, pure-Python extraction with optional OCR fallback."""
     e = _ext(name)
     s: Optional[str] = None
 
@@ -155,13 +202,20 @@ def extract_text(name: str, mime: str, data: bytes) -> str:
     elif e == ".ipynb":
         s = _try_ipynb_text(data)
     elif e == ".pdf":
-        s = _try_pdf_text(data)
+        s = _try_pdf_text(data)  # non-OCR path
+        # OCR fallback (opt-in) if empty
+        if OCR_BACKEND == "tesseract" and not (s or "").strip():
+            s = _ocr_pdf_tesseract(data, max_pages=OCR_MAX_PAGES, dpi=OCR_DPI)
     elif e == ".docx":
         s = _try_docx_text(data)
     elif e == ".pptx":
         s = _try_pptx_text(data)
     elif e == ".xlsx":
         s = _try_xlsx_text(data)
+    elif e in {".png", ".jpg", ".jpeg", ".gif"}:
+        # No non-OCR text here; optionally OCR
+        if OCR_BACKEND == "tesseract":
+            s = _ocr_image_tesseract(data)
 
     return "" if s is None else s
 
@@ -219,7 +273,7 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
     MOD_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() == "true"
     MOD_MODEL = os.getenv("MODERATION_MODEL", "omni-moderation-latest")
 
-    # Minimal copies (avoid importing from main.py)
+    # (local copies of small helpers identical to /api/chat/stream for SSE)
     def _blocks_to_text(blocks: Any) -> str:
         if isinstance(blocks, str):
             return blocks
@@ -271,7 +325,6 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
         try:
             claims = await get_current_user(request)
         except AuthError as e:
-            # return SSE-style error so UI shows a banner
             async def auth_error_stream():
                 yield b"event: error\n"
                 yield f"data: auth_error:{str(e)}\n\n".encode("utf-8")
@@ -293,7 +346,7 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
 
         # ---- Early rejection: count & types/sizes ----
         if len(files) > MAX_FILES:
-            raise HTTPException(status_code=413, detail="too_many_files")
+            raise HTTPException(status_code=413, detail=f"Too many files uploaded. Maximum allowed is: {MAX_FILES}.")
 
         attachments: list[tuple[str, str]] = []
         for f in files:
@@ -316,7 +369,6 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
         user_msg   = {"role": "user",   "content": p.message}
         thread_id  = (config.get("configurable") or {}).get("thread_id")
 
-        # Persist the user turn so transcript replay works after reload
         if thread_id:
             try:
                 await append_transcript(client, user_id, thread_id,
