@@ -10,7 +10,7 @@ Must Have
 - UI bridge for tokens — Done
 - Agent: enable the checkpointer (short‑term memory) -Done
 - History pane (UI) - Done 
-- Long‑term memory (after threads & history)
+- Long‑term memory (after threads & history) -Done
 - Response structure output:
     The OpenAI API returns plain text with Markdown syntax.
     chat gpt renders that Markdown into styled HTML.
