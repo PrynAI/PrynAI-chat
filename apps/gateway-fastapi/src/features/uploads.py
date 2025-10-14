@@ -1,8 +1,21 @@
 # apps/gateway-fastapi/src/features/uploads.py
 from __future__ import annotations
 import io, os, re, json, zipfile, html
-from typing import List, Tuple, Optional
-from fastapi import UploadFile, HTTPException
+from typing import List, Tuple, Optional, AsyncGenerator, Any
+
+from fastapi import APIRouter, UploadFile, HTTPException, Request, File, Form
+from fastapi.responses import StreamingResponse
+
+from langgraph_sdk import get_client
+from langgraph.pregel.remote import RemoteGraph
+from openai import OpenAI
+
+from src.features.websearch import ChatIn, build_langgraph_config
+from src.features.profiles import ensure_profile
+from src.features.transcript import append_transcript, TranscriptMessage
+from src.auth.entra import AuthError
+
+# ----------------------------- Limits & helpers ------------------------------
 
 MAX_FILES = 5
 MAX_FILE_MB = 10
@@ -122,12 +135,10 @@ def _try_ipynb_text(b: bytes) -> Optional[str]:
 def extract_text(name: str, mime: str, data: bytes) -> str:
     """Best-effort, pure-Python extraction (semantic-only)."""
     e = _ext(name)
-    t = (mime or "").lower()
     s: Optional[str] = None
 
     if e in {".txt", ".md", ".py", ".js", ".html", ".css", ".yaml", ".yml", ".sql"}:
         s = data.decode("utf-8", errors="ignore")
-        # crude HTML to text if needed
         if e == ".html":
             s = re.sub(r"<[^>]+>", " ", s or "")
     elif e == ".csv":
@@ -152,10 +163,7 @@ def extract_text(name: str, mime: str, data: bytes) -> str:
     elif e == ".xlsx":
         s = _try_xlsx_text(data)
 
-    if s is None:
-        # Non-text (images) or unsupported → include filename only
-        return ""
-    return s
+    return "" if s is None else s
 
 def validate_file_accept(name: str, mime: str) -> None:
     e = _ext(name)
@@ -191,3 +199,178 @@ def build_attachments_system_message(items: List[Tuple[str, str]]) -> str:
         "Do not assume a file ran; treat it as text provided by the user."
     )
     return header + "\n\n" + "\n\n".join(blocks)
+
+# ----------------------------- Router factory --------------------------------
+
+def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
+    """
+    Returns an APIRouter mounted by main.py at /api/chat.
+    Adds: POST /api/chat/stream_files  (multipart: payload(JSON string) + files[])
+    """
+    router = APIRouter(prefix="/api/chat", tags=["chat+uploads"])
+
+    # Local client/remote (not imported from main.py to avoid circular imports)
+    LANGGRAPH_URL = os.environ["LANGGRAPH_URL"]
+    GRAPH_NAME = os.environ.get("LANGGRAPH_GRAPH", "chat")
+    client = get_client(url=LANGGRAPH_URL)
+    remote = RemoteGraph(GRAPH_NAME, client=client)
+
+    OAI = OpenAI()
+    MOD_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() == "true"
+    MOD_MODEL = os.getenv("MODERATION_MODEL", "omni-moderation-latest")
+
+    # Minimal copies (avoid importing from main.py)
+    def _blocks_to_text(blocks: Any) -> str:
+        if isinstance(blocks, str):
+            return blocks
+        if isinstance(blocks, list):
+            parts: list[str] = []
+            for b in blocks:
+                if isinstance(b, dict):
+                    t = b.get("text") or b.get("input_text") or b.get("output_text")
+                else:
+                    t = getattr(b, "text", None)
+                if t:
+                    parts.append(t)
+            return "".join(parts)
+        return ""
+
+    def _chunk_to_text(chunk: Any) -> str:
+        c = getattr(chunk, "content", None)
+        if c is not None:
+            return _blocks_to_text(c)
+        if isinstance(chunk, dict):
+            if "content" in chunk:
+                return _blocks_to_text(chunk["content"])
+            if "delta" in chunk:
+                d = chunk["delta"]
+                if isinstance(d, dict):
+                    return _blocks_to_text(d.get("content") or d.get("text") or d)
+                return _blocks_to_text(d)
+            if "messages" in chunk and chunk["messages"]:
+                m = chunk["messages"][-1]
+                if isinstance(m, dict):
+                    return _blocks_to_text(m.get("content", m))
+                return _blocks_to_text(getattr(m, "content", m))
+        if isinstance(chunk, str):
+            return chunk
+        return ""
+
+    def _sse_event_from_text(text: str) -> bytes:
+        t = text.replace("\r\n", "\n").replace("\r", "\n")
+        payload = "data: " + t.replace("\n", "\ndata: ")
+        return (payload + "\n\n").encode("utf-8")
+
+    @router.post("/stream_files")
+    async def stream_chat_with_files(
+        request: Request,
+        payload: str = Form(...),                 # JSON string -> ChatIn
+        files: list[UploadFile] = File(default=[]),
+    ):
+        # ---- AUTHN ----
+        try:
+            claims = await get_current_user(request)
+        except AuthError as e:
+            # return SSE-style error so UI shows a banner
+            async def auth_error_stream():
+                yield b"event: error\n"
+                yield f"data: auth_error:{str(e)}\n\n".encode("utf-8")
+                yield b"event: done\n"
+                yield b"data: [DONE]\n\n"
+            return StreamingResponse(auth_error_stream(), media_type="text/event-stream")
+
+        if not claims:
+            raise HTTPException(status_code=401, detail="unauthenticated")
+
+        user_id = user_id_from_claims(claims)
+
+        # ---- Parse payload ----
+        try:
+            body = json.loads(payload or "{}")
+            p = ChatIn(**body)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid_payload")
+
+        # ---- Early rejection: count & types/sizes ----
+        if len(files) > MAX_FILES:
+            raise HTTPException(status_code=413, detail="too_many_files")
+
+        attachments: list[tuple[str, str]] = []
+        for f in files:
+            validate_file_accept(f.filename or "file", f.content_type or "")
+            data = await read_limited(f)  # raises 413 on >10MB
+            txt = extract_text(f.filename, f.content_type or "", data)
+            attachments.append((f.filename, txt))
+
+        # ---- Ensure minimal profile ----
+        try:
+            await ensure_profile(client, user_id, claims=claims)
+        except Exception:
+            pass
+
+        # ---- Build agent config & messages ----
+        config = build_langgraph_config(p)
+        config.setdefault("configurable", {})["user_id"] = user_id
+
+        system_msg = {"role": "system", "content": build_attachments_system_message(attachments)}
+        user_msg   = {"role": "user",   "content": p.message}
+        thread_id  = (config.get("configurable") or {}).get("thread_id")
+
+        # Persist the user turn so transcript replay works after reload
+        if thread_id:
+            try:
+                await append_transcript(client, user_id, thread_id,
+                                       TranscriptMessage(role="user", content=p.message))
+            except Exception:
+                pass
+
+        # ---- Optional moderation of input ----
+        if MOD_ENABLED:
+            try:
+                _ = OAI.moderations.create(model=MOD_MODEL, input=p.message).results[0]
+            except Exception:
+                pass  # best-effort; don't block
+
+        async def event_gen() -> AsyncGenerator[bytes, None]:
+            acc: list[str] = []
+            try:
+                async for item in remote.astream(
+                    {"messages": [system_msg, user_msg]},
+                    config=config,
+                    stream_mode="messages",
+                ):
+                    msg_chunk = item[0] if isinstance(item, tuple) and len(item) == 2 else item
+                    text = _chunk_to_text(msg_chunk)
+                    if text:
+                        acc.append(text)
+                        yield _sse_event_from_text(text)
+
+                if MOD_ENABLED and acc:
+                    try:
+                        out = "".join(acc)
+                        r = OAI.moderations.create(model=MOD_MODEL, input=out).results[0]
+                        if r.flagged:
+                            yield b"event: policy\n"
+                            yield b"data: A safety filter replaced part of the output.\n\n"
+                    except Exception:
+                        pass
+            except Exception as e:
+                yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
+            finally:
+                if thread_id and acc:
+                    try:
+                        await append_transcript(client, user_id, thread_id,
+                                                TranscriptMessage(role="assistant", content="".join(acc)))
+                    except Exception:
+                        pass
+                yield b"event: done\n"
+                yield b"data: [DONE]\n\n"
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+        return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
+
+    return router
