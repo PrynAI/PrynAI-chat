@@ -154,12 +154,14 @@ name = "Help"
 display_name = "Help Center"
 url = "https://prynai.github.io"
 target = "_blank"
+icon_url = "/icons/question-mark-circle.svg"
 
 [[UI.header_links]]
 name = "ReleaseNotes"
 display_name = "Release Notes"
 url = "https://github.com/PrynAI/PrynAI-chat/releases"
 target = "_blank"
+icon_url = "/icons/release-notes-line.svg"
 
 [meta]
 generated_by = "2.8.3"
