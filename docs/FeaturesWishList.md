@@ -16,7 +16,7 @@ Must Have
     chat gpt renders that Markdown into styled HTML.
     If you want the same look:
 	•	Use a Markdown renderer (like react-markdown, marked, or markdown-it)
-- File upload (pdfs, docx, txt)
+- File upload (pdfs, docx, txt) -done 
 - user profile settings
 - Arcade Connectors
 - RAG integration with realtime enviornmental CO2 emission data 
