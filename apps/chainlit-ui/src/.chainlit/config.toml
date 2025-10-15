@@ -149,5 +149,17 @@ default_avatar_file_url = ""
 #     url = "https://github.com/Chainlit/chainlit/issues"
 #     target = "_blank" (default)  # Optional: "_self", "_parent", "_top".
 
+[[UI.header_links]]
+name = "Help"
+display_name = "Help Center"
+url = "https://prynai.github.io"
+target = "_blank"
+
+[[UI.header_links]]
+name = "ReleaseNotes"
+display_name = "Release Notes"
+url = "https://github.com/PrynAI/PrynAI-chat/releases"
+target = "_blank"
+
 [meta]
 generated_by = "2.8.3"

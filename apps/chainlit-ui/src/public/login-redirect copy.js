@@ -5,9 +5,6 @@
 // - Click: /open/t/<id> sets cookie BEFORE Chainlit loads
 // - Also hides Chainlit's built-in "New Chat" controls (body/header) robustly
 // - Adds a left-docked toggle button; sidebar is CLOSED by default (mobile friendly)
-// - Remembers open/closed state in localStorage
-// - Loads profile-menu.js plugin (modular, can be disabled by removing the script tag)
-// - Redirects /chat/login to /auth/, unless just logged in (sessionStorage flag set by auth.js)
 
 (function redirectChatLoginToAuth() {
     try {
@@ -230,15 +227,4 @@
     })();
 
     refresh();
-})();
-
-/* ---------- Load profile menu plugin (modular) ---------- */
-(function loadProfileMenuPlugin() {
-    try {
-        if (!location.pathname.startsWith("/chat")) return;
-        const s = document.createElement("script");
-        s.src = "/public/profile-menu.js";
-        s.defer = true;
-        document.head.appendChild(s);
-    } catch (_) { }
 })();

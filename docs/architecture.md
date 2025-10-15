@@ -3,7 +3,7 @@
 # PrynAI Chat — End‑to‑End Architecture (Single Region, PGVector Memory)
 
 ### Edge & Identity
-  • DNS (GoDaddy): CNAME chat.prynai.com → Azure Front Door (recommended) OR ACA public FQDN
+  • DNS (GoDaddy): CNAME chat.prynai.com → ACA public FQDN
   • Microsoft Entra External ID (CIAM): Google sign‑in → issues JWT
 
 ### Application — Azure Container Apps (one environment, two apps)
@@ -37,7 +37,7 @@
   • ACA autoscaling (KEDA): minReplicas > 0 for low TTFT, HTTP/CPU triggers
 
 ### Request path
-  1) Browser → Front Door (TLS/WAF) → Chainlit (ACA)
+  1) Browser → ACA public FQDN → Chainlit (ACA)
   2) Chainlit (WebSocket) → FastAPI (JWT)
   3) FastAPI → LangGraph Platform (invoke graph)
   4) LangGraph → (as needed) OpenAI  / Arcade MCP tools
