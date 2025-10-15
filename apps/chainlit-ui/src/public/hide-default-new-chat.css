@@ -1,5 +1,5 @@
 /* apps/chainlit-ui/src/public/hide-default-new-chat.css */
-@import url('/public/markdown-theme.css');
+@import url('/apps/chainlit-ui/src/public/markdown-theme.css');
 
 /* Hide Chainlit’s built-in "New Chat" controls (header or body) using stable selectors */
 [data-testid="new-chat-button"],

@@ -161,7 +161,7 @@ name = "ReleaseNotes"
 display_name = "Release Notes"
 url = "https://github.com/PrynAI/PrynAI-chat/releases"
 target = "_blank"
-icon_url = "/icons/release-notes-line.svg"
+icon_url = "/apps/chainlit-ui/src/public/icons/release-notes-line.svg"
 
 [meta]
 generated_by = "2.8.3"
