@@ -1,7 +1,7 @@
 # apps/chainlit-ui/src/server.py
 from __future__ import annotations
 
-import os, json, base64, re, urllib.parse
+import os, json, base64
 from typing import Optional, Dict, List
 from importlib.resources import files as pkg_files
 
@@ -103,25 +103,6 @@ def _bearer_from_request(request: Request) -> Optional[str]:
         return authz
     return None
 
-def _thread_id_from_referer(headers: Dict[str, str]) -> Optional[str]:
-    """
-    Fallback thread id discovery for first-load races:
-    - When a user lands on /chat/?t=<id> without the prynai_tid cookie,
-      Chainlit still opens a WS session immediately. The WS 'Referer'
-      header contains the page URL, so we can extract ?t=<id> here.
-    """
-    ref = headers.get("referer") or headers.get("Referrer") or ""
-    if not ref:
-        return None
-    try:
-        q = urllib.parse.urlparse(ref).query
-        tid = dict(urllib.parse.parse_qsl(q)).get("t")
-        if tid and re.fullmatch(r"[0-9a-fA-F-]{36}", tid):
-            return tid
-    except Exception:
-        pass
-    return None
-
 # ---------- UI helper APIs (proxy to Gateway with cookie auth) ----------
 @app.get("/ui/threads")
 async def ui_list_threads(request: Request):
@@ -215,9 +196,6 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
     if not primary_email and isinstance(emails_claim, (list, tuple)) and emails_claim:
         primary_email = emails_claim[0]
 
-    # NEW: fall back to thread id from ws Referer (?t=<id>) if cookie not set yet.
-    active_tid = tokens.get(TID_COOKIE) or _thread_id_from_referer(headers)
-
     identifier = (
         claims.get("name")
         or primary_email
@@ -235,7 +213,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
-        "active_thread_id": active_tid,  # <<—— important
+        "active_thread_id": tokens.get(TID_COOKIE),
     }
     return cl.User(identifier=identifier, metadata=meta)
 

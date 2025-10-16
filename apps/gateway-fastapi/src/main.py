@@ -150,10 +150,6 @@ def _moderate_or_raise(text: str) -> dict:
 
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatIn, request: Request):
-    """
-    Streams model output; forwards thread_id + web_search in config.
-    Also ensures a user profile exists and appends transcript for UI replay.
-    """
     # 1) AUTHN
     try:
         claims = await get_current_user(request)
@@ -203,7 +199,22 @@ async def stream_chat(payload: ChatIn, request: Request):
     acc: list[str] = []
     thread_id = (config.get("configurable") or {}).get("thread_id")
 
-    # NEW: write the user turn immediately so it shows after reload
+    # NEW: resolve a thread id if still missing (defensive)
+    if not thread_id:
+        try:
+            # Try newest for this user
+            results = await client.threads.search(metadata={"user_id": user_id}, limit=1)
+            if results:
+                thread_id = results[0]["thread_id"]
+            else:
+                created = await client.threads.create(metadata={"user_id": user_id})
+                thread_id = created["thread_id"]
+            config.setdefault("configurable", {})["thread_id"] = thread_id
+        except Exception:
+            # If this ever fails, we still stream the model but skip transcript write
+            thread_id = None
+
+    # Write the user turn immediately so it shows after reload
     if thread_id:
         try:
             await append_transcript(
@@ -211,20 +222,11 @@ async def stream_chat(payload: ChatIn, request: Request):
                 TranscriptMessage(role="user", content=payload.message)
             )
         except Exception as e:
-            print(json.dumps({
-                "type": "transcript_write_error",
-                "when": "user",
-                "tid": thread_id,
-                "err": str(e)
-            }), flush=True)
+            print(json.dumps({"type": "transcript_write_error", "when": "user", "tid": thread_id, "err": str(e)}), flush=True)
 
-    async def event_gen() -> AsyncGenerator[bytes, None]:
+    async def event_gen():
         try:
-            async for item in remote.astream(
-                {"messages": [user_msg]},
-                config=config,
-                stream_mode="messages",
-            ):
+            async for item in remote.astream({"messages": [user_msg]}, config=config, stream_mode="messages"):
                 msg_chunk = item[0] if isinstance(item, tuple) and len(item) == 2 else item
                 text = _chunk_to_text(msg_chunk)
                 if text:
@@ -250,18 +252,9 @@ async def stream_chat(payload: ChatIn, request: Request):
                         TranscriptMessage(role="assistant", content="".join(acc))
                     )
                 except Exception as e:
-                    print(json.dumps({
-                        "type": "transcript_write_error",
-                        "when": "assistant",
-                        "tid": thread_id,
-                        "err": str(e)
-                    }), flush=True)
+                    print(json.dumps({"type": "transcript_write_error", "when": "assistant", "tid": thread_id, "err": str(e)}), flush=True)
             yield b"event: done\n"
             yield b"data: [DONE]\n\n"
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-    }
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
