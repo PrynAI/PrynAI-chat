@@ -273,7 +273,7 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
     MOD_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() == "true"
     MOD_MODEL = os.getenv("MODERATION_MODEL", "omni-moderation-latest")
 
-    # (helpers identical to /api/chat/stream)
+    # (local copies of small helpers identical to /api/chat/stream for SSE)
     def _blocks_to_text(blocks: Any) -> str:
         if isinstance(blocks, str):
             return blocks
@@ -313,7 +313,7 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
     def _sse_event_from_text(text: str) -> bytes:
         t = text.replace("\r\n", "\n").replace("\r", "\n")
         payload = "data: " + t.replace("\n", "\ndata: ")
-        return (payload + "\n\n").encode("utf-8")  # end event (SSE spec)
+        return (payload + "\n\n").encode("utf-8")
 
     @router.post("/stream_files")
     async def stream_chat_with_files(
@@ -373,13 +373,8 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
             try:
                 await append_transcript(client, user_id, thread_id,
                                        TranscriptMessage(role="user", content=p.message))
-            except Exception as e:
-                print(json.dumps({
-                    "type": "transcript_write_error",
-                    "when": "user",
-                    "tid": thread_id,
-                    "err": str(e)
-                }), flush=True)
+            except Exception:
+                pass
 
         # ---- Optional moderation of input ----
         if MOD_ENABLED:
@@ -418,13 +413,8 @@ def make_uploads_router(get_current_user, user_id_from_claims) -> APIRouter:
                     try:
                         await append_transcript(client, user_id, thread_id,
                                                 TranscriptMessage(role="assistant", content="".join(acc)))
-                    except Exception as e:
-                        print(json.dumps({
-                            "type": "transcript_write_error",
-                            "when": "assistant",
-                            "tid": thread_id,
-                            "err": str(e)
-                        }), flush=True)
+                    except Exception:
+                        pass
                 yield b"event: done\n"
                 yield b"data: [DONE]\n\n"
 

@@ -1,4 +1,18 @@
 # apps/gateway-fastapi/src/main.py
+# Production-ready FastAPI gateway:
+# - Validates Microsoft Entra External ID (CIAM) access tokens
+# - Streams model output to the UI via SSE
+# - Forwards web_search and thread_id to LangGraph
+# - Adds CORS for localhost + your chat domain
+# - /api/profile, /api/threads, and /api/threads/{id}/messages routes (LangGraph Store)
+# - (Optional) mounts /api/uploads if the feature module is present
+#
+# Env required:
+#   OIDC_DISCOVERY_URL = https://<subdomain>.ciamlogin.com/<tenant-id>/v2.0/.well-known/openid-configuration
+#   OIDC_AUDIENCE      = <Gateway API client ID GUID>
+#   LANGGRAPH_URL, LANGGRAPH_GRAPH=chat
+#   MODERATION_ENABLED=true|false, MODERATION_MODEL=omni-moderation-latest
+
 from __future__ import annotations
 
 import os
@@ -56,15 +70,24 @@ remote = RemoteGraph(GRAPH_NAME, client=client)
 
 # ---- Routers -----------------------------------------------------------------
 
+# Durable user profile (Store-backed)
 app.include_router(make_profiles_router(client, get_current_user, user_id_from_claims))
+
+# Threads CRUD (per-user), soft/hard delete fallbacks
 app.include_router(make_threads_router(client, get_current_user, user_id_from_claims))
+
+# Transcript per thread (user/assistant messages for reload)
 app.include_router(make_transcript_router(client, get_current_user, user_id_from_claims))
 
-# Optional uploads router (if present)
+# Optional: File uploads feature (mounted only if present)
 try:
+    # Import here so the whole app doesn't fail if the module is missing.
     from src.features.uploads import make_uploads_router  # type: ignore
+
+    # Pass auth helpers so routes remain user-scoped/secure.
     app.include_router(make_uploads_router(get_current_user, user_id_from_claims))
 except Exception:
+    # If the feature module isn’t present , keep running without uploads.
     pass
 
 
@@ -111,14 +134,12 @@ def _chunk_to_text(chunk: Any) -> str:
 def _sse_event_from_text(text: str) -> bytes:
     """
     Build one SSE event for a whole text chunk.
-    - Normalize to '\n'
-    - Emit multiple 'data:' lines inside a single event to preserve line breaks
-      (per SSE spec: consecutive 'data:' lines are joined with '\n').
+    - Normalizes newlines to '\n'
+    - Emits multiple 'data:' lines inside a single event to preserve line breaks
     """
     t = text.replace("\r\n", "\n").replace("\r", "\n")
     payload = "data: " + t.replace("\n", "\ndata: ")
-    return (payload + "\n\n").encode("utf-8")  # blank line ends the event (spec)
-# Spec refs: MDN + WHATWG. :contentReference[oaicite:6]{index=6}
+    return (payload + "\n\n").encode("utf-8")
 
 # ---- Health & identity -------------------------------------------------------
 
@@ -210,13 +231,8 @@ async def stream_chat(payload: ChatIn, request: Request):
                 client, user_id, thread_id,
                 TranscriptMessage(role="user", content=payload.message)
             )
-        except Exception as e:
-            print(json.dumps({
-                "type": "transcript_write_error",
-                "when": "user",
-                "tid": thread_id,
-                "err": str(e)
-            }), flush=True)
+        except Exception:
+            pass
 
     async def event_gen() -> AsyncGenerator[bytes, None]:
         try:
@@ -229,8 +245,10 @@ async def stream_chat(payload: ChatIn, request: Request):
                 text = _chunk_to_text(msg_chunk)
                 if text:
                     acc.append(text)
+                    # Emit ONE SSE event for the whole chunk; multiple data: lines preserve newlines.
                     yield _sse_event_from_text(text)
 
+            # (Optional) output moderation notice
             if MOD_ENABLED and acc:
                 try:
                     out = "".join(acc)
@@ -243,19 +261,15 @@ async def stream_chat(payload: ChatIn, request: Request):
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n".encode("utf-8")
         finally:
+            # Append assistant transcript after stream completes
             if thread_id and acc:
                 try:
                     await append_transcript(
                         client, user_id, thread_id,
                         TranscriptMessage(role="assistant", content="".join(acc))
                     )
-                except Exception as e:
-                    print(json.dumps({
-                        "type": "transcript_write_error",
-                        "when": "assistant",
-                        "tid": thread_id,
-                        "err": str(e)
-                    }), flush=True)
+                except Exception:
+                    pass
             yield b"event: done\n"
             yield b"data: [DONE]\n\n"
 

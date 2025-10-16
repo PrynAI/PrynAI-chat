@@ -1,3 +1,4 @@
+# apps/gateway-fastapi/src/features/transcript.py
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
@@ -15,48 +16,35 @@ def _ns(user_id: str, thread_id: str) -> list[str]:
 class TranscriptMessage(BaseModel):
     role: str  # "user" | "assistant"
     content: str
-    ts: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ts: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 async def _get_transcript(client, user_id: str, thread_id: str) -> list[dict]:
     """
     Transcript lives as one item: key="transcript" in the thread namespace.
-
-    NEW (backward-compatible):
-      We now store a self-describing object:
-        { "user_id": ..., "thread_id": ..., "messages": [ {role, content, ts}, ... ] }
-
-      If an older shape exists ({"messages":[...]}), we still read it.
+    Shape: {"messages": [ {role, content, ts}, ... ]}
     """
     try:
         item = await client.store.get_item(_ns(user_id, thread_id), key="transcript")
         val = getattr(item, "value", item) if item else None
         if isinstance(val, dict):
-            msgs = list(val.get("messages") or [])
-            return msgs
+            return list(val.get("messages") or [])
     except Exception:
         pass
     return []
 
 
 async def append_transcript(client, user_id: str, thread_id: str, msg: TranscriptMessage) -> None:
-    """
-    Append one message to the per-thread transcript. We embed the whole value (index=["$"])
-    to avoid field-mismatch issues and keep search flexible later.
-    """
     msgs = await _get_transcript(client, user_id, thread_id)
     msgs.append(msg.model_dump())
-
-    value = {
-        "user_id": user_id,
-        "thread_id": thread_id,
-        "messages": msgs,
-    }
     await client.store.put_item(
         _ns(user_id, thread_id),
         key="transcript",
-        value=value,
-        index=["$"],  # embed whole doc per LangGraph guidance
+        value={"messages": msgs},
+        # allow future filtering if needed
+        index=["user_id", "thread_id"],
     )
 
 
