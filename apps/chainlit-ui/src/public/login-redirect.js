@@ -156,11 +156,16 @@
     toggle.addEventListener("click", () => setOpen(!document.body.classList.contains("pry-sb-open")));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
 
-    async function api(path, opts) {
-        const r = await fetch(path, { credentials: "include", ...opts });
-        if (!r.ok) throw new Error(`${r.status}`);
-        try { return await r.json(); } catch { return {}; }
-    }
+   async function api(path, opts) {
+       const r = await fetch(path, { credentials: "include", cache: "no-store", ...opts });
+       if (r.status === 401 || r.status === 403) {
+           // Token likely expired: go refresh at /auth (MSAL will bridge back to /chat)
+           location.assign("/auth/");
+           throw new Error(`auth_${r.status}`);
+       }
+       if (!r.ok) throw new Error(`${r.status}`);
+       try { return await r.json(); } catch { return {}; }
+   }
     async function refresh() {
         try { render(await api("/ui/threads")); }
         catch (e) { console.warn("History load failed", e); }

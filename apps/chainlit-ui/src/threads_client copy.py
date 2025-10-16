@@ -15,12 +15,6 @@ class ThreadSummary:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
-class APIError(Exception):
-    def __init__(self, status: int, body: str = ""):
-        super().__init__(f"gateway_status_{status}")
-        self.status = status
-        self.body = body
-
 def _auth_headers() -> Dict[str, str]:
     app_user = cl.user_session.get("user")
     token = None
@@ -37,8 +31,6 @@ async def list_threads(limit: int = 50) -> List[ThreadSummary]:
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"{GATEWAY_BASE}/api/threads?limit={limit}", headers=headers)
-        if r.status_code in (401, 403):
-            raise APIError(r.status_code, r.text or "")
         if r.status_code != 200:
             return []
         items = r.json() or []
@@ -56,8 +48,6 @@ async def get_thread(thread_id: str) -> Optional[ThreadSummary]:
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"{GATEWAY_BASE}/api/threads/{thread_id}", headers=headers)
-        if r.status_code in (401, 403):
-            raise APIError(r.status_code, r.text or "")
         if r.status_code != 200:
             return None
         t = r.json()
@@ -150,8 +140,6 @@ async def list_messages(thread_id: str) -> list[dict]:
     headers = _auth_headers()
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"{GATEWAY_BASE}/api/threads/{thread_id}/messages", headers=headers)
-        if r.status_code in (401, 403):
-            raise APIError(r.status_code, r.text or "")
         if r.status_code != 200:
             return []
         return r.json() or []

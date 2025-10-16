@@ -2,8 +2,6 @@
 import os, json, mimetypes
 import httpx
 import chainlit as cl
-from threads_client import ensure_active_thread, get_thread, ensure_title, list_messages
-from threads_client import APIError
 
 from settings_websearch import inject_settings_ui, is_web_search_enabled
 from threads_client import ensure_active_thread, get_thread, ensure_title, list_messages
@@ -15,12 +13,7 @@ def _active_thread_id() -> str | None: return cl.user_session.get("thread_id")
 def _set_active_thread_id(tid: str | None) -> None: cl.user_session.set("thread_id", tid if tid else None)
 
 async def _render_transcript(thread_id: str):
-    try:
-        msgs = await list_messages(thread_id)
-    except APIError as e:
-        # Auth expired: show a clear call to action; don't switch threads.
-        await cl.Message("Your session expired. Please **[sign in again](/auth/)** to load this conversation.").send()
-        return
+    msgs = await list_messages(thread_id)
     if not msgs: return
     for m in msgs:
         role = (m.get("role") or "").lower()
@@ -37,17 +30,11 @@ async def start():
         return
     meta_tid = getattr(app_user, "metadata", None) and app_user.metadata.get("active_thread_id")
     if meta_tid:
-        try:
-            t = await get_thread(meta_tid)
-            if t:
-                _set_active_thread_id(meta_tid)
-                await cl.Message(content=f"Resuming thread `{meta_tid[:8]}`.").send()
-                await _render_transcript(meta_tid); return
-        except APIError:
-            # Token expired: keep the chosen thread, ask user to re-auth.
+        t = await get_thread(meta_tid)
+        if t:
             _set_active_thread_id(meta_tid)
-            await cl.Message(f"Session expired for thread `{meta_tid[:8]}`. **[Sign in](/auth/)** to continue.").send()
-            return
+            await cl.Message(content=f"Resuming thread `{meta_tid[:8]}`.").send()
+            await _render_transcript(meta_tid); return
     ts = await ensure_active_thread()
     if ts and ts.thread_id:
         _set_active_thread_id(ts.thread_id)
