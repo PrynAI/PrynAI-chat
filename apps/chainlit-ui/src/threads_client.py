@@ -1,4 +1,3 @@
-# apps/chainlit-ui/src/threads_client.py
 from __future__ import annotations
 import os
 import httpx

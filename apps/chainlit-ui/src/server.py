@@ -1,4 +1,3 @@
-# apps/chainlit-ui/src/server.py
 from __future__ import annotations
 
 import os, json, base64, re, urllib.parse

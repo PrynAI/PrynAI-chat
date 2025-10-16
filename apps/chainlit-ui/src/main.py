@@ -1,4 +1,3 @@
-# apps/chainlit-ui/src/main.py
 import os, json, mimetypes
 import httpx
 import chainlit as cl
