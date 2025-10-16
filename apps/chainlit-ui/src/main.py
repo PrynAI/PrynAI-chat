@@ -1,133 +1,94 @@
 # apps/chainlit-ui/src/main.py
-import os, json, mimetypes
+from __future__ import annotations
+
+import os
+import asyncio
 import httpx
 import chainlit as cl
-from threads_client import ensure_active_thread, get_thread, ensure_title, list_messages
-from threads_client import APIError
+from typing import List, Dict, Any, Optional
 
-from settings_websearch import inject_settings_ui, is_web_search_enabled
-from threads_client import ensure_active_thread, get_thread, ensure_title, list_messages
-from sse_utils import iter_sse_events
+from src.threads_client import (
+    ensure_active_thread,
+    list_messages,
+)
 
-GATEWAY_BASE = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+GATEWAY = os.getenv("GATEWAY_URL", "http://localhost:8080").rstrip("/")
 
-def _active_thread_id() -> str | None: return cl.user_session.get("thread_id")
-def _set_active_thread_id(tid: str | None) -> None: cl.user_session.set("thread_id", tid if tid else None)
+def _user_token() -> Optional[str]:
+    u = cl.user_session.get("user")
+    if not u:
+        return None
+    return (u.metadata or {}).get("access_token")
 
-async def _render_transcript(thread_id: str):
-    try:
-        msgs = await list_messages(thread_id)
-    except APIError as e:
-        # Auth expired: show a clear call to action; don't switch threads.
-        await cl.Message("Your session expired. Please **[sign in again](/auth/)** to load this conversation.").send()
-        return
-    if not msgs: return
-    for m in msgs:
-        role = (m.get("role") or "").lower()
-        content = m.get("content") or ""
-        if role == "user": await cl.Message(author="You", content=content).send()
-        else: await cl.Message(content=content).send()
+def _active_thread_from_metadata() -> Optional[str]:
+    u = cl.user_session.get("user")
+    if not u:
+        return None
+    return (u.metadata or {}).get("active_thread_id")
 
 @cl.on_chat_start
-async def start():
-    await inject_settings_ui()
-    app_user = cl.user_session.get("user")
-    if not app_user:
-        await cl.Message("You're not signed in. [Go to sign in](/auth)").send()
-        return
-    meta_tid = getattr(app_user, "metadata", None) and app_user.metadata.get("active_thread_id")
-    if meta_tid:
-        try:
-            t = await get_thread(meta_tid)
-            if t:
-                _set_active_thread_id(meta_tid)
-                await cl.Message(content=f"Resuming thread `{meta_tid[:8]}`.").send()
-                await _render_transcript(meta_tid); return
-        except APIError:
-            # Token expired: keep the chosen thread, ask user to re-auth.
-            _set_active_thread_id(meta_tid)
-            await cl.Message(f"Session expired for thread `{meta_tid[:8]}`. **[Sign in](/auth/)** to continue.").send()
-            return
-    ts = await ensure_active_thread()
-    if ts and ts.thread_id:
-        _set_active_thread_id(ts.thread_id)
-        await cl.Message(content=f"Resuming thread `{ts.thread_id[:8]}`.").send()
-        await _render_transcript(ts.thread_id)
-    else:
-        await cl.Message(content="Ready. (No threads yet; your first message will create one.)").send()
+async def _on_start():
+    """
+    1) Resolve the active thread id from header-auth metadata (cookie or deep link).
+    2) Fallback to newest thread (creates one if none).
+    3) Fetch transcript from Gateway and replay it.
+    """
+    token = _user_token()
+    tid = _active_thread_from_metadata()
 
-def _collect_uploads(message: cl.Message):
-    """Return a list of {'name','path','mime'} for files dropped on this message."""
-    out = []
-    for el in (getattr(message, "elements", None) or []):
-        # Accept any element that exposes a local path (Chainlit writes temp files server-side)
-        p = getattr(el, "path", None)
-        if not p or not os.path.exists(p): continue
-        name = getattr(el, "name", os.path.basename(p))
-        mime = getattr(el, "mime", None) or (mimetypes.guess_type(name)[0] or "application/octet-stream")
-        out.append({"name": name, "path": p, "mime": mime})
-    return out
+    # Fallback to newest if metadata had no thread (or cookie race)
+    if not tid:
+        tid = await ensure_active_thread(token)
+
+    cl.user_session.set("thread_id", tid)
+
+    # Small banner so users know which thread we resumed
+    await cl.Message(content=f"Resuming thread `{tid[:8]}`.", author="system").send()
+
+    # Load and replay persisted transcript so refresh never shows a blank screen
+    try:
+        messages = await list_messages(token, tid)
+    except Exception:
+        messages = []
+
+    if messages:
+        for m in messages:
+            role = (m or {}).get("role")
+            content = (m or {}).get("content") or ""
+            # Guard against streaming artifacts or empty placeholders
+            if not content.strip():
+                continue
+            author = "You" if role == "user" else "Assistant"
+            msg = cl.Message(author=author, content=content)
+            await msg.send()
 
 @cl.on_message
-async def handle_message(message: cl.Message):
-    if not _active_thread_id():
-        ts = await ensure_active_thread()
-        if ts and ts.thread_id: _set_active_thread_id(ts.thread_id)
-    if _active_thread_id():
-        _ = await ensure_title(_active_thread_id(), message.content)
+async def _on_message(message: cl.Message):
+    """
+    Stream via Gateway -> LangGraph. We include the thread_id so the Gateway
+    writes the transcript and the agent runs on the right thread context.
+    """
+    token = _user_token()
+    tid = cl.user_session.get("thread_id")
+    payload = {"message": message.content, "thread_id": tid}
 
-    app_user = cl.user_session.get("user")
-    token = getattr(app_user, "metadata", {}).get("access_token") if app_user else None
-    headers = {"accept": "text/event-stream"}
-    if token: headers["authorization"] = f"Bearer {token}"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    stream_url = f"{GATEWAY}/api/chat/stream"
 
-    payload = {
-        "message": message.content,
-        "thread_id": _active_thread_id(),
-        "web_search": is_web_search_enabled(),
-    }
+    # Stream chunks into one Chainlit message
+    assistant = cl.Message(author="Assistant", content="")
+    await assistant.send()
 
-    uploads = _collect_uploads(message)
-    out = cl.Message(content=""); await out.send()
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("POST", stream_url, json=payload, headers=headers) as r:
+            async for line in r.aiter_lines():
+                if not line:
+                    continue
+                # SSE spec: multiple 'data:' lines form one event. We treat each line atomically here
+                # because the server already does the right multi-line framing.
+                if line.startswith("data: "):
+                    await assistant.stream_token(line[6:])
+                elif line == "event: done":
+                    break
 
-    try:
-        async with httpx.AsyncClient(timeout=None) as client:
-            if uploads:
-                # Stream with files (multipart + SSE)
-                files = []
-                for u in uploads:
-                    files.append(("files", (u["name"], open(u["path"], "rb"), u["mime"])))
-                # NOTE: do not JSON-encode files; send payload separately in a form field
-                form = {"payload": json.dumps(payload)}
-                url = f"{GATEWAY_BASE.rstrip('/')}/api/chat/stream_files"
-                async with client.stream("POST", url, data=form, files=files, headers=headers) as resp:
-                    if resp.status_code >= 400:
-                        body = (await resp.aread()).decode("utf-8", errors="ignore")[:500]
-                        await cl.Message(content=f"**Gateway error {resp.status_code}:** {body}").send()
-                        return
-                    async for event, data in iter_sse_events(resp):
-                        if event == "done": break
-                        elif event == "policy": await cl.Message(content=f"**Safety notice:** {data}").send()
-                        elif event == "error": await cl.Message(content=f"**Error:** {data}").send()
-                        else: await out.stream_token(data)
-            else:
-                # Existing JSON streaming path (unchanged)
-                url = f"{GATEWAY_BASE.rstrip('/')}/api/chat/stream"
-                async with client.stream("POST", url, json=payload, headers=headers) as resp:
-                    if resp.status_code >= 400:
-                        body = (await resp.aread()).decode("utf-8", errors="ignore")[:500]
-                        await cl.Message(content=f"**Gateway error {resp.status_code}:** {body}").send()
-                        return
-                    async for event, data in iter_sse_events(resp):
-                        if event == "done": break
-                        elif event == "policy": await cl.Message(content=f"**Safety notice:** {data}").send()
-                        elif event == "error": await cl.Message(content=f"**Error:** {data}").send()
-                        else: await out.stream_token(data)
-        await out.update()
-    except Exception as e:
-        await cl.Message(content=f"**Error:** {e}").send()
-    finally:
-        # Clean up Chainlit temp files immediately (session-only ingestion)
-        for u in uploads:
-            try: os.remove(u["path"])
-            except Exception: pass
+    await assistant.update()
