@@ -17,7 +17,7 @@ Must Have
     If you want the same look:
 	•	Use a Markdown renderer (like react-markdown, marked, or markdown-it)
 - File upload (pdfs, docx, txt) -done 
-- user profile settings
+- user profile settings - Done
 - Feedback using langgraph 
 
 - RAG integration with realtime enviornmental CO2 emission data 
