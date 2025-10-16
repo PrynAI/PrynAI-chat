@@ -237,7 +237,7 @@
     try {
         if (!location.pathname.startsWith("/chat")) return;
         const s = document.createElement("script");
-        s.src = "/apps/chainlit-ui/src/public/profile-menu.js";
+        s.src = "/chat/public/profile-menu.js";
         s.defer = true;
         document.head.appendChild(s);
     } catch (_) { }

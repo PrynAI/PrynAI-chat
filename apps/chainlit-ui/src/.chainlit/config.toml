@@ -102,14 +102,14 @@ cot = "full"
 
 # Specify a CSS file that can be used to customize the user interface.
 # The CSS file can be served from the public directory or via an external link.
-custom_css ="/public/hide-default-new-chat.css"
+custom_css ="/chat/public/hide-default-new-chat.css"
 
 # Specify additional attributes for a custom CSS file
 # custom_css_attributes = "media=\"print\""
 
 # Specify a JavaScript file that can be used to customize the user interface.
 # The JavaScript file can be served from the public directory.
-custom_js = "/public/login-redirect.js"
+custom_js = "/chat/public/login-redirect.js"
 
 # The style of alert boxes. Can be "classic" or "modern".
 alert_style = "classic"
@@ -154,14 +154,14 @@ name = "Help"
 display_name = "Help Center"
 url = "https://prynai.github.io"
 target = "_blank"
-icon_url = "/icons/question-mark-circle.svg"
+icon_url = "/chat/public/icons/question-mark-circle.svg"
 
 [[UI.header_links]]
 name = "ReleaseNotes"
 display_name = "Release Notes"
 url = "https://github.com/PrynAI/PrynAI-chat/releases"
 target = "_blank"
-icon_url = "/apps/chainlit-ui/src/public/icons/release-notes-line.svg"
+icon_url = "/chat/public/icons/release-notes-line.svg"
 
 [meta]
 generated_by = "2.8.3"
