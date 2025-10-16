@@ -26,10 +26,12 @@
         }
     }
 
-    
+    // Minimal styles to match dark header; we avoid depending on internal classnames.
     const STYLE = `
+    .pry-menu-item { display:block; padding:8px 12px; text-decoration:none; color:inherit; border-radius:6px; }
+    .pry-menu-item:hover { background:#1b1b20; }
     .pry-menu-sep { height:1px; background:#2a2a2e; margin:4px 8px; }
-    .pry-menu-email { padding:8px 12px; opacity:.8;}
+    .pry-menu-email { padding:8px 12px; opacity:.8; font-size:.9em; }
   `;
     function ensureStyleTag() {
         if (document.getElementById("pry-menu-style")) return;
@@ -46,6 +48,7 @@
     }
     function makeLink(label, href, target) {
         const a = document.createElement("a");
+        a.className = "pry-menu-item";
         a.textContent = label;
         a.href = href;
         a.target = target || "_blank";
