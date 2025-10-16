@@ -189,16 +189,9 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         return None
 
     claims = _jwt_claims_unverified(token)
-
-    # Prefer a real email: `email`, then first of `emails` (array). Fall back to name/UPN/sub.
-    emails_claim = claims.get("emails")
-    primary_email = claims.get("email")
-    if not primary_email and isinstance(emails_claim, (list, tuple)) and emails_claim:
-        primary_email = emails_claim[0]
-
     identifier = (
         claims.get("name")
-        or primary_email
+        or claims.get("email")
         or claims.get("preferred_username")
         or claims.get("sub")
         or "user"
@@ -208,8 +201,7 @@ def header_auth_callback(headers: Dict[str, str]) -> Optional[cl.User]:
         "access_token": token,
         "sub": claims.get("sub"),
         "name": claims.get("name"),
-        "email": primary_email,
-        "emails": emails_claim if isinstance(emails_claim, (list, tuple)) else None,
+        "email": claims.get("email"),
         "preferred_username": claims.get("preferred_username"),
         "iss": claims.get("iss"),
         "aud": claims.get("aud"),
