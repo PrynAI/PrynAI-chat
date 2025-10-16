@@ -1,15 +1,10 @@
-// Sidebar + auth helpers for PrynAI Chat UI.
-// - Works on /chat and /chat/?t=<thread_id>
-// - History sidebar (search/list/rename/delete) stays the same.
-// - REBIND: Built-in "New Chat" now creates a Gateway thread then navigates
-//           to /open/t/<id> (which sets the thread cookie before Chainlit loads).
-// - CRITICAL: intercept pointerdown + click + keydown so Chainlit's default
-//             "clear history" flow never fires.
-//
-// NOTE: We rely on UI helper routes served by src/server.py:
-//   POST /ui/threads        -> create a new thread
-//   GET  /open/t/<id>       -> sets prynai_tid cookie, then redirects to /chat/ .
-// These are already implemented.  (See server.py.) 
+// apps/chainlit-ui/src/public/login-redirect.js
+// PrynAI Chat UI glue:
+//  - Rebind OOB "New Chat" (create Gateway thread -> /open/t/<id>)
+//  - Cancel Chainlit's "clear history" modal if it still appears
+//  - Ensure a concrete thread cookie exists on first load (bootstrap)
+//  - Sidebar: history/search/rename/delete (unchanged)
+//  - 401/403 from /ui/* -> redirect to /auth (token refresh)
 
 (function redirectChatLoginToAuth() {
     try {
@@ -23,80 +18,135 @@
     } catch (_) { }
 })();
 
-/* ---------- Rebind the OOB "New Chat" to our /ui/threads -> /open/t/<id> flow ---------- */
-(function rebindNewChatToPrynAI() {
-    // Robust detection: aria-label, data-testid, or visible text "New Chat" (with/without "+")
+/* ---------- helpers ---------- */
+async function apiAuthAware(path, opts) {
+    const r = await fetch(path, { credentials: "include", cache: "no-store", ...opts });
+    if (r.status === 401 || r.status === 403) {
+        location.assign("/auth/");
+        throw new Error(`auth_${r.status}`);
+    }
+    if (!r.ok) throw new Error(`${r.status}`);
+    try { return await r.json(); } catch { return {}; }
+}
+function cookieGet(name) {
+    const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return m ? decodeURIComponent(m[1]) : "";
+}
+
+/* ---------- new-thread flow ---------- */
+async function createThreadAndGo() {
+    const r = await fetch("/ui/threads", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const t = await r.json();
+    if (t && t.thread_id) {
+        // Sets prynai_tid via server then Chainlit boots on that id
+        location.assign(`/open/t/${t.thread_id}`);
+        return true;
+    }
+    return false;
+}
+
+/* ---------- Rebind OOB "New Chat" (capture earliest) ---------- */
+(function rebindNewChat() {
+    // Decide whether an element or any ancestor in the event path looks like New Chat
     const isNewChatLabel = (s) =>
         (s || "").replace(/[+]/g, "").replace(/\s+/g, " ").trim().toLowerCase() === "new chat";
-    const looksLikeNewChat = (el) => {
-        if (!el || !(el instanceof Element)) return false;
-        const aria = el.getAttribute("aria-label") || "";
-        const testid = el.getAttribute("data-testid") || "";
-        const txt = el.textContent || "";
-        return isNewChatLabel(aria) || /new[_\-\s]?chat/i.test(testid) || isNewChatLabel(txt);
-    };
-
-    async function createThreadAndGo() {
-        const r = await fetch("/ui/threads", {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const t = await r.json();
-        if (t && t.thread_id) {
-            // Sets prynai_tid cookie, then Chainlit boots on that id
-            location.assign(`/open/t/${t.thread_id}`);
-            return true;
+    function pathLooksLikeNewChat(ev) {
+        const path = (ev.composedPath && ev.composedPath()) || [];
+        for (const el of path) {
+            if (!(el instanceof Element)) continue;
+            const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+            const testid = (el.getAttribute("data-testid") || "").toLowerCase();
+            const txt = (el.textContent || "").toLowerCase();
+            if (isNewChatLabel(aria) || /new[_\-\s]?chat/.test(testid) || isNewChatLabel(txt)) return true;
+            // A few common synonyms Chainlit has used
+            if (/create new chat|start new chat|reset chat/.test(aria) || /create new chat/.test(txt)) return true;
         }
         return false;
     }
 
-    // Single handler that we bind to multiple event types.
-    async function interceptNewChat(e) {
+    async function intercept(ev) {
         try {
-            // Find nearest actionable element; New Chat may be a button, link or role=button.
-            const target =
-                e.target.closest?.('[data-testid], [aria-label], button, a, [role="button"]') || e.target;
-            if (!looksLikeNewChat(target)) return;
-
-            // Stop the default Chainlit behavior (which opens the "clear history" modal)
-            e.preventDefault?.();
-            e.stopImmediatePropagation?.();
-            e.stopPropagation?.();
-
+            if (!pathLooksLikeNewChat(ev)) return;
+            ev.preventDefault?.();
+            ev.stopImmediatePropagation?.();
+            ev.stopPropagation?.();
             try {
                 await createThreadAndGo();
             } catch (err) {
-                // If our API fails for some reason, fall back to Chainlit's default to keep UX unblocked.
-                console.warn("Create thread failed; allowing default New Chat.", err);
-                document.removeEventListener("pointerdown", interceptNewChat, true);
-                document.removeEventListener("click", interceptNewChat, true);
-                document.removeEventListener("keydown", interceptNewChat, true);
-                // Re-dispatch a new event of the same type so the UI behaves as if untouched.
+                console.warn("Create thread failed; letting default New Chat proceed", err);
+                document.removeEventListener("pointerdown", intercept, true);
+                document.removeEventListener("click", intercept, true);
+                document.removeEventListener("keydown", intercept, true);
+                // Re-dispatch original event so the app isn't stuck
                 setTimeout(() => {
-                    const t = e.type === "keydown"
-                        ? new KeyboardEvent("keydown", { key: e.key || "Enter", bubbles: true })
-                        : new MouseEvent("click", { bubbles: true });
-                    target.dispatchEvent(t);
+                    if (ev.type === "keydown") {
+                        const k = new KeyboardEvent("keydown", { key: ev.key || "Enter", bubbles: true });
+                        (ev.target || document.body).dispatchEvent(k);
+                    } else {
+                        const c = new MouseEvent("click", { bubbles: true });
+                        (ev.target || document.body).dispatchEvent(c);
+                    }
                 }, 0);
             }
         } catch { }
     }
 
-    // IMPORTANT: Chainlit opens its confirm on pointerdown; capture that.
-    document.addEventListener("pointerdown", interceptNewChat, true);
-    // Keep click for safety (e.g., keyboard users that trigger click via Enter).
-    document.addEventListener("click", interceptNewChat, true);
-    // Accessibility: Enter/Space should also create a thread.
+    // Chainlit opens confirm on pointerdown; capture phase
+    document.addEventListener("pointerdown", intercept, true);
+    document.addEventListener("click", intercept, true);
     document.addEventListener("keydown", (e) => {
         const key = e.key || e.code;
         if (key !== "Enter" && key !== " ") return;
-        interceptNewChat(e);
+        intercept(e);
     }, true);
 })();
 
-/* ---------- History Sidebar (toggleable, closed by default) ---------- */
+/* ---------- Modal watchdog (cancel "Create New Chat" dialog if it sneaks in) ---------- */
+(function watchForNewChatModal() {
+    const mo = new MutationObserver(async (muts) => {
+        for (const m of muts) {
+            for (const n of m.addedNodes) {
+                if (!(n instanceof Element)) continue;
+                const dlg = n.matches?.('[role="dialog"]') ? n : n.querySelector?.('[role="dialog"]');
+                if (!dlg) continue;
+                const text = (dlg.textContent || "").toLowerCase();
+                if (!/create new chat/.test(text)) continue;
+                // Click "Cancel" if present to dismiss Chainlit's confirm
+                const btns = Array.from(dlg.querySelectorAll("button"));
+                const cancel = btns.find((b) => /cancel/i.test(b.textContent || ""));
+                try { cancel && cancel.click(); } catch { }
+                // Now run our new-thread flow
+                try { await createThreadAndGo(); } catch { }
+            }
+        }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+})();
+
+/* ---------- Ensure a concrete thread cookie exists on /chat (first load) ---------- */
+(function bootstrapThreadCookieIfMissing() {
+    if (!location.pathname.startsWith("/chat")) return;
+    if (cookieGet("prynai_tid")) return;               // already have an active thread cookie
+    if (sessionStorage.getItem("pry_boot_tid") === "1") return; // guard against loops
+    sessionStorage.setItem("pry_boot_tid", "1");
+    // Use newest thread; if none exist yet, the first message will create one.
+    apiAuthAware("/ui/threads").then((items) => {
+        if (Array.isArray(items) && items.length) {
+            location.replace(`/open/t/${items[0].thread_id}`);
+        } else {
+            sessionStorage.removeItem("pry_boot_tid"); // allow another try later
+        }
+    }).catch(() => {
+        sessionStorage.removeItem("pry_boot_tid");
+    });
+})();
+
+/* ---------- History Sidebar (search/list/rename/delete) ---------- */
 (function initSidebar() {
     if (!location.pathname.startsWith("/chat")) return;
     if (document.getElementById("pry-sidebar")) return;
@@ -152,22 +202,12 @@
         toggle.textContent = open ? "✕" : "☰";
         localStorage.setItem("pry_sb_open", open ? "1" : "0");
     }
-    setOpen(localStorage.getItem("pry_sb_open") === "1"); // default closed
+    setOpen(localStorage.getItem("pry_sb_open") === "1");
     toggle.addEventListener("click", () => setOpen(!document.body.classList.contains("pry-sb-open")));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
 
-   async function api(path, opts) {
-       const r = await fetch(path, { credentials: "include", cache: "no-store", ...opts });
-       if (r.status === 401 || r.status === 403) {
-           // Token likely expired: go refresh at /auth (MSAL will bridge back to /chat)
-           location.assign("/auth/");
-           throw new Error(`auth_${r.status}`);
-       }
-       if (!r.ok) throw new Error(`${r.status}`);
-       try { return await r.json(); } catch { return {}; }
-   }
     async function refresh() {
-        try { render(await api("/ui/threads")); }
+        try { render(await apiAuthAware("/ui/threads")); }
         catch (e) { console.warn("History load failed", e); }
     }
     function render(items, q = "") {
@@ -188,19 +228,16 @@
           <span class="rename" title="Rename">✎</span>
           <span class="del" title="Delete">🗑</span>`;
 
-                // Open
                 li.querySelector(".row").addEventListener("click", (ev) => {
                     ev.preventDefault();
-                    location.assign(`/open/t/${t.thread_id}`);
+                    location.assign(`/open/t/${t.thread_id}`);  // sets cookie then reload
                 });
-
-                // Rename
                 li.querySelector(".rename").addEventListener("click", async (ev) => {
                     ev.preventDefault(); ev.stopPropagation();
                     const cur = t.title || "";
                     const next = (prompt("Rename chat:", cur) || "").trim();
                     if (next && next !== cur) {
-                        await api(`/ui/threads/${t.thread_id}`, {
+                        await apiAuthAware(`/ui/threads/${t.thread_id}`, {
                             method: "PUT",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ title: next }),
@@ -208,24 +245,18 @@
                         await refresh();
                     }
                 });
-
-                // Delete
                 li.querySelector(".del").addEventListener("click", async (ev) => {
                     ev.preventDefault(); ev.stopPropagation();
                     const name = t.title || t.thread_id.slice(0, 8);
                     if (!confirm(`Delete chat "${name}"? This cannot be undone.`)) return;
-
-                    try { await api(`/ui/threads/${t.thread_id}`, { method: "DELETE" }); } catch { }
-
-                    // If this was the active one, clear cookie & jump to newest (or create)
-                    try { await api("/ui/clear_thread", { method: "POST" }); } catch { }
+                    try { await apiAuthAware(`/ui/threads/${t.thread_id}`, { method: "DELETE" }); } catch { }
+                    try { await apiAuthAware("/ui/clear_thread", { method: "POST" }); } catch { }
                     let items = [];
-                    try { items = await api("/ui/threads"); } catch { }
+                    try { items = await apiAuthAware("/ui/threads"); } catch { }
                     if (items.length) { location.assign(`/open/t/${items[0].thread_id}`); return; }
                     try {
-                        const created = await api("/ui/threads", { method: "POST" });
-                        location.assign(`/open/t/${created.thread_id}`);
-                        return;
+                        const created = await apiAuthAware("/ui/threads", { method: "POST" });
+                        location.assign(`/open/t/${created.thread_id}`); return;
                     } catch { }
                     await refresh();
                 });
@@ -234,10 +265,10 @@
             });
     }
     searchEl.addEventListener("input", async (e) => {
-        try { render(await api("/ui/threads"), e.target.value || ""); } catch { }
+        try { render(await apiAuthAware("/ui/threads"), e.target.value || ""); } catch { }
     });
 
-    // If bookmarked /chat/?t=<id>, convert to /open/t/<id> once (sets cookie first)
+    // If user bookmarked /chat/?t=<id>, convert to /open/t/<id> once (set cookie first)
     (function coerceBookmark() {
         const url = new URL(location.href);
         const tid = url.searchParams.get("t");
@@ -251,7 +282,7 @@
     refresh();
 })();
 
-/* ---------- Profile menu plugin ---------- */
+/* ---------- small plugin: profile menu ---------- */
 (function loadProfileMenuPlugin() {
     try {
         if (!location.pathname.startsWith("/chat")) return;
