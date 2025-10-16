@@ -102,14 +102,14 @@ cot = "full"
 
 # Specify a CSS file that can be used to customize the user interface.
 # The CSS file can be served from the public directory or via an external link.
-custom_css ="/chat/public/hide-default-new-chat.css"
+custom_css ="/public/hide-default-new-chat.css"
 
 # Specify additional attributes for a custom CSS file
 # custom_css_attributes = "media=\"print\""
 
 # Specify a JavaScript file that can be used to customize the user interface.
 # The JavaScript file can be served from the public directory.
-custom_js = "/chat/public/login-redirect.js"
+custom_js = "/public/login-redirect.js"
 
 # The style of alert boxes. Can be "classic" or "modern".
 alert_style = "classic"
