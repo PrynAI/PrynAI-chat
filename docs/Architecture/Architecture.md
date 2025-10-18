@@ -9,6 +9,9 @@
 ### High‑level:
 - Browser (MSAL SPA) → Chainlit UI → Gateway (FastAPI) → LangGraph RemoteGraph → OpenAI (Responses + tools) + LangGraph Store (pgvector).
 
+## Edge & Identity
+- DNS (GoDaddy): CNAME chat.prynai.com → ACA public FQDN • Microsoft Entra External ID (CIAM): Google sign‑in → issues JWT
+
 ## Components
 
 - ### Chainlit UI (ca-chainlit)
