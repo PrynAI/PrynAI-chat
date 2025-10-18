@@ -24,12 +24,7 @@
 ### External Tools & Models
   • OpenAI API (chat/reasoning/embeddings; streamed responses)
   • Open AI Web search
-  • MCP tools via Arcade:
-      – Gmail, Google Calendar
-      – Outlook Mail, Outlook Calendar
-      – Microsoft Teams, LinkedIn
-      – GitHub
-      – Custom MCP: https://mcp.prynai.com/mcp
+
 
 ### Platform Services & CI/CD
   • Azure Key Vault (API keys, OAuth client secrets)
@@ -40,6 +35,6 @@
   1) Browser → ACA public FQDN → Chainlit (ACA)
   2) Chainlit (WebSocket) → FastAPI (JWT)
   3) FastAPI → LangGraph Platform (invoke graph)
-  4) LangGraph → (as needed) OpenAI  / Arcade MCP tools
+  4) LangGraph → (as needed) OpenAI
   5) LangGraph ↔ Postgres Store (pgvector) for long‑term memory
   6) Streamed tokens ← FastAPI ← Chainlit ← Browser (TTFT-first)
