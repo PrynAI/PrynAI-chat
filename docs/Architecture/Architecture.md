@@ -75,6 +75,9 @@
      - Durable transcripts and memories—document retention policy and user deletion flow.
    
 ## Deployment & scaling:
+  - ### Platform Services & CI/CD
+    - Azure Key Vault (API keys, OAuth client secrets) • ACR (images) + GitHub Actions (OIDC) → ACA deploy • ACA autoscaling (KEDA): minReplicas > 0 for low TTFT, HTTP/CPU triggers
+      
   - ### Azure Container Apps:
       - Two containers (ca-chainlit, ca-gateway) with minReplicas: 0 (scale‑to‑zero) and HTTP scale rules; discuss cold‑start trade‑off vs minReplicas: 1 for latency‑sensitive edge cases.
   - ### LangGraph Cloud:
