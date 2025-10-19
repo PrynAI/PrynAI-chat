@@ -1,6 +1,6 @@
 # OpenAI Web Search (UI toggle + agent tool)
 
-- Status: Completed
+
 - Scope:
     - Add a session‑level “Web search (OpenAI)” toggle in Chainlit, propagate the setting through the Gateway, and enable OpenAI’s built‑in web_search tool in the LangGraph agent. When the toggle is ON, the agent prepends a short system instruction and forces one call to the web_search tool for that turn; when OFF, no tool is available or used.
 
