@@ -29,7 +29,7 @@ Secret references and env var binding are configured on the Container Apps using
 
 ---
 
-## Safety & guardrails (enabled in MVP‑0)
+## Safety & guardrails
 
 We added **defense‑in‑depth**:
 
@@ -85,7 +85,7 @@ curl.exe -N ^
 
 - Bind with az containerapp hostname add/bind and request the managed certificate.
 
-## Responsible AI mapping (what MVP‑0 already covers)
+## Responsible AI mapping
 
 - Reliability & Safety: input/output moderation, crisis completions.
 
