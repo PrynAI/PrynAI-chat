@@ -1,8 +1,8 @@
 📄 docs/infra-setup.md
 
-# Infrastructure Setup — Azure + GitHub (MVP‑0)
+# Infrastructure Setup — Azure + GitHub
 
-This guide documents the exact infra we stood up for the **PrynAI-chat** MVP‑0:
+
 
 - **Azure Container Apps (ACA)**: `ca-chainlit` (UI) and `ca-gateway` (API)
 - **Azure Container Registry (ACR)**
